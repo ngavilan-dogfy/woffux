@@ -112,6 +112,12 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 		return err
 	}
 
+	// Generate keepalive workflow (prevents GitHub from disabling scheduled workflows)
+	keepaliveYAML := GenerateKeepaliveWorkflowYAML()
+	if err := os.WriteFile(filepath.Join(workflowDir, "keepalive.yml"), []byte(keepaliveYAML), 0644); err != nil {
+		return err
+	}
+
 	// Check if there are changes
 	statusOut, _ := cmdOutput(tmpDir, "git", "status", "--porcelain")
 	if strings.TrimSpace(statusOut) == "" {

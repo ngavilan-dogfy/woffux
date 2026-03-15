@@ -166,6 +166,31 @@ jobs:
 `
 }
 
+// GenerateKeepaliveWorkflowYAML prevents GitHub from auto-disabling scheduled workflows.
+func GenerateKeepaliveWorkflowYAML() string {
+	return `name: Keepalive
+
+on:
+  schedule:
+    - cron: '0 12 1 */2 *'
+
+jobs:
+  keepalive:
+    name: Keep workflows alive
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Keepalive commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive [skip ci]"
+          git push
+`
+}
+
 func timezoneOffsetHours(tz string) int {
 	switch tz {
 	case "CET", "Europe/Madrid", "Europe/Barcelona", "Europe/Paris", "Europe/Berlin":
