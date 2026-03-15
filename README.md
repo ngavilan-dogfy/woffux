@@ -94,9 +94,15 @@ woffuk setup
 → Dogfy Diet — IT, Senior Platform Engineer
 → Office: Oficinas Landmark
 
-┃ Home location > Open map
-  (browser opens with an interactive map — search, click, or use "My location")
-✓ 41.190452, 1.597968
+┃ Home location
+┃ > Paste a Google Maps URL
+┃   Search by address
+┃   Open interactive map
+
+  → Open Google Maps, find your location, copy the URL.
+  Paste Google Maps URL: https://www.google.com/maps/place/.../@41.385,2.173,17z/...
+
+✓ 41.385064, 2.173404
 
 ┃ Use default schedule? Yes
 
@@ -162,14 +168,13 @@ Two workflows:
 6. Send Telegram notification (if configured)
 ```
 
-## Map picker
+## Location picker
 
-The setup wizard includes an interactive map that opens in your browser:
+Three ways to set your location:
 
-- **Search** — autocomplete with Photon API as you type
-- **Click** — place marker anywhere on the map
-- **Drag** — adjust marker position
-- **My location** — button that uses browser GPS
+1. **Google Maps URL** (easiest) — find your place on Google Maps, copy the URL, paste it
+2. **Search by address** — type an address and pick from results
+3. **Interactive map** — opens a map in your browser with search, click, and GPS location
 
 ## Telegram notifications
 

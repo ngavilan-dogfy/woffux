@@ -23,7 +23,7 @@ func PickFromMap(title string, initialLat, initialLon float64) (*MapResult, erro
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, mapHTML(title, initialLat, initialLon))
+		fmt.Fprint(w, mapHTML(title, initialLat, initialLon))
 	})
 
 	mux.HandleFunc("/confirm", func(w http.ResponseWriter, r *http.Request) {

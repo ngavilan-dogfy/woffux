@@ -209,7 +209,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 			fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.4f, %.4f", r.Lat, r.Lon)))
 			return r.Lat, r.Lon, nil
 		}
-		return locationPicker(title)
+		return 0, 0, fmt.Errorf("no selection")
 	}
 
 	options := make([]huh.Option[int], 0, len(results)+1)
@@ -232,7 +232,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 	).Run()
 
 	if choice == -1 {
-		return locationPicker(title)
+		return 0, 0, fmt.Errorf("no selection")
 	}
 
 	r := results[choice]
@@ -241,76 +241,131 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 }
 
 func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float64, float64, error) {
-	var useMap bool
+	for {
+		var method string
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title(title).
+					Options(
+						huh.NewOption("Paste a Google Maps URL", "gmaps"),
+						huh.NewOption("Search by address", "search"),
+						huh.NewOption("Open interactive map", "map"),
+					).
+					Value(&method),
+			),
+		).Run()
+
+		switch method {
+		case "gmaps":
+			lat, lon, err := googleMapsURLPicker(title)
+			if err == nil {
+				return lat, lon, nil
+			}
+			// If failed, loop back to menu
+
+		case "search":
+			lat, lon, err := searchPicker(title)
+			if err == nil {
+				return lat, lon, nil
+			}
+
+		case "map":
+			fmt.Printf("  %s Opening map in browser...\n", sInfo)
+			result, err := geocode.PickFromMap(title, defaultLat, defaultLon)
+			if err == nil {
+				fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.6f, %.6f", result.Lat, result.Lon)))
+				return result.Lat, result.Lon, nil
+			}
+		}
+	}
+}
+
+func googleMapsURLPicker(title string) (float64, float64, error) {
+	fmt.Println()
+	fmt.Printf("  %s Open Google Maps, find your location, and copy the URL from the browser.\n", sInfo)
+	fmt.Println()
+
+	var openGmaps bool
 	huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
-				Title(title).
-				Description("Pick on a map in your browser, or search by text").
-				Affirmative("Open map").
-				Negative("Search by text").
-				Value(&useMap),
+				Title("Open Google Maps?").
+				Affirmative("Open").
+				Negative("I have the URL").
+				Value(&openGmaps),
 		),
 	).Run()
 
-	if useMap {
-		fmt.Printf("  %s Opening map in browser...\n", sInfo)
-		result, err := geocode.PickFromMap(title, defaultLat, defaultLon)
-		if err != nil {
-			return 0, 0, err
-		}
-		fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.6f, %.6f", result.Lat, result.Lon)))
-		return result.Lat, result.Lon, nil
+	if openGmaps {
+		openURL("https://www.google.com/maps")
+		fmt.Printf("  %s Opened. Find your location and copy the URL.\n\n", sInfo)
 	}
 
-	return locationPicker(title)
-}
-
-func locationPicker(title string) (float64, float64, error) {
 	for {
-		var query string
-		huh.NewForm(
+		var url string
+		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewInput().
-					Title("Search").
-					Description("Street, building, city...").
-					Placeholder("Carrer Vistula 12 Segur de Calafell").
-					Value(&query).
-					Validate(func(s string) error {
-						if len(s) < 3 {
-							return fmt.Errorf("enter at least 3 characters")
-						}
-						return nil
-					}),
-			).Title(title),
+					Title("Paste Google Maps URL").
+					Placeholder("https://www.google.com/maps/place/...").
+					Value(&url),
+			),
 		).Run()
-
-		var results []geocode.Result
-		var searchErr error
-
-		spinner.New().
-			Title("Searching...").
-			Action(func() {
-				results, searchErr = geocode.Search(query, 5)
-			}).
-			Run()
-
-		if searchErr != nil {
-			fmt.Printf("  %s %s\n\n", sWarn, searchErr)
-			continue
-		}
-
-		if len(results) == 0 {
-			fmt.Printf("  %s No results. Try with more details.\n\n", sWarn)
-			continue
-		}
-
-		lat, lon, err := pickFromResults(results, title)
 		if err != nil {
 			return 0, 0, err
 		}
+
+		lat, lon, err := geocode.ParseGoogleMapsURL(url)
+		if err != nil {
+			fmt.Printf("  %s %s\n\n", lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), err)
+			continue
+		}
+
+		fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.6f, %.6f", lat, lon)))
 		return lat, lon, nil
 	}
+}
+
+func searchPicker(title string) (float64, float64, error) {
+	var query string
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Search").
+				Description("Street, building, city...").
+				Placeholder("Passeig Zona Franca 28 Barcelona").
+				Value(&query).
+				Validate(func(s string) error {
+					if len(s) < 3 {
+						return fmt.Errorf("enter at least 3 characters")
+					}
+					return nil
+				}),
+		).Title(title),
+	).Run()
+
+	var results []geocode.Result
+	var searchErr error
+
+	spinner.New().
+		Title("Searching...").
+		Action(func() {
+			results, searchErr = geocode.Search(query, 5)
+		}).
+		Run()
+
+	if searchErr != nil {
+		fmt.Printf("  %s %s\n\n", sWarn, searchErr)
+		return 0, 0, searchErr
+	}
+
+	if len(results) == 0 {
+		fmt.Printf("  %s No results. Try again.\n\n", sWarn)
+		return 0, 0, fmt.Errorf("no results")
+	}
+
+	return pickFromResults(results, title)
 }
 
 func scheduleWizard() (config.Schedule, string, error) {
