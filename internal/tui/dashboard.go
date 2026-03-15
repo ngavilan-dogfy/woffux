@@ -297,12 +297,12 @@ func (d *Dashboard) View() string {
 
 	dashboard := strings.Join(sections, "\n")
 
-	// Overlays
+	// Overlays — render fullscreen centered (no ANSI string splicing)
 	switch d.overlay {
 	case overlayMenu:
-		return d.renderOverlayMenu(dashboard)
+		return d.renderOverlayMenu()
 	case overlaySignConf:
-		return d.renderOverlayConfirm(dashboard, "Sign now?", "Clock in/out on Woffu right now.", "y/enter", "n/esc")
+		return d.renderOverlayConfirm("Sign now?", "Clock in/out on Woffu right now.", "y/enter", "n/esc")
 	case overlayAutoConf:
 		verb := "Enable"
 		desc := "Resume GitHub Actions auto-signing."
@@ -310,7 +310,7 @@ func (d *Dashboard) View() string {
 			verb = "Disable"
 			desc = "Stop GitHub Actions from signing automatically."
 		}
-		return d.renderOverlayConfirm(dashboard, verb+" auto-sign?", desc, "y/enter", "n/esc")
+		return d.renderOverlayConfirm(verb+" auto-sign?", desc, "y/enter", "n/esc")
 	}
 
 	return dashboard
@@ -433,15 +433,15 @@ func (d *Dashboard) renderSchedule() string {
 		if !dd.d.Enabled {
 			continue
 		}
-		var times []string
+		line := "  " + sDimmed.Render(dd.n) + "  "
 		for i, t := range dd.d.Times {
 			if i%2 == 0 {
-				times = append(times, sSignIn.Render("▶")+t.Time)
+				line += sSignIn.Render("IN") + " " + t.Time + "  "
 			} else {
-				times = append(times, sSignOut.Render("■")+t.Time)
+				line += sSignOut.Render("OUT") + " " + t.Time + "  "
 			}
 		}
-		parts = append(parts, sDimmed.Render("  "+dd.n+" ")+strings.Join(times, " "))
+		parts = append(parts, line)
 	}
 	return "\n" + sSubtitle.Render("  Schedule") + "\n" + strings.Join(parts, "\n")
 }
@@ -560,8 +560,9 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 }
 
 // ── Overlay rendering ──
+// Overlays replace the full screen (no ANSI-corrupting string splicing).
 
-func (d *Dashboard) renderOverlayMenu(bg string) string {
+func (d *Dashboard) renderOverlayMenu() string {
 	actions := d.getActions()
 
 	var rows []string
@@ -584,13 +585,12 @@ func (d *Dashboard) renderOverlayMenu(bg string) string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).
 		Padding(1, 2).
-		Width(50).
 		Render(menuContent)
 
-	return placeCenter(bg, menuBox, d.width, d.height)
+	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, menuBox)
 }
 
-func (d *Dashboard) renderOverlayConfirm(bg, title, desc, yesHint, noHint string) string {
+func (d *Dashboard) renderOverlayConfirm(title, desc, yesHint, noHint string) string {
 	content := sSection.Render("  "+title) + "\n\n" +
 		sDimmed.Render("  "+desc) + "\n\n" +
 		"  " + hint(yesHint, "confirm") + "    " + hint(noHint, "cancel")
@@ -599,53 +599,9 @@ func (d *Dashboard) renderOverlayConfirm(bg, title, desc, yesHint, noHint string
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorWarning).
 		Padding(1, 2).
-		Width(50).
 		Render(content)
 
-	return placeCenter(bg, box, d.width, d.height)
-}
-
-func placeCenter(bg, overlay string, w, h int) string {
-	bgLines := strings.Split(bg, "\n")
-	ovLines := strings.Split(overlay, "\n")
-
-	ovW := lipgloss.Width(overlay)
-	startRow := (h - len(ovLines)) / 2
-	startCol := (w - ovW) / 2
-	if startRow < 0 {
-		startRow = 0
-	}
-	if startCol < 0 {
-		startCol = 0
-	}
-
-	// Pad bg to fill height
-	for len(bgLines) < h {
-		bgLines = append(bgLines, "")
-	}
-
-	for i, ovLine := range ovLines {
-		row := startRow + i
-		if row >= len(bgLines) {
-			break
-		}
-		// Pad the bg line
-		bgLine := bgLines[row]
-		bgRunes := []rune(bgLine)
-		for len(bgRunes) < w {
-			bgRunes = append(bgRunes, ' ')
-		}
-		// Replace section with overlay line
-		prefix := string(bgRunes[:startCol])
-		suffix := ""
-		end := startCol + lipgloss.Width(ovLine)
-		if end < len(bgRunes) {
-			suffix = string(bgRunes[end:])
-		}
-		bgLines[row] = prefix + ovLine + suffix
-	}
-
-	return strings.Join(bgLines[:h], "\n")
+	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // ── Commands ──
