@@ -18,10 +18,10 @@ func ForkAndSetup(cfg *config.Config, password string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	forkName := username + "/woffuk-cli"
+	forkName := username + "/woffux"
 
 	// Check if user already owns the upstream repo (they're the author, not a forker)
-	isOwner := (username + "/woffuk-cli") == upstreamRepo
+	isOwner := (username + "/woffux") == upstreamRepo
 
 	if !isOwner {
 		// Check if fork already exists
@@ -142,7 +142,7 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 
 	// Commit and push
 	_ = runCmd(tmpDir, "git", "add", ".github/workflows/")
-	_ = runCmd(tmpDir, "git", "commit", "-m", "chore: update auto-sign workflows from woffux-cli")
+	_ = runCmd(tmpDir, "git", "commit", "-m", "chore: update auto-sign workflows from woffux")
 	if err := runCmd(tmpDir, "git", "push"); err != nil {
 		return fmt.Errorf("push workflows: %w", err)
 	}

@@ -68,7 +68,7 @@ Or clone and build:
 
 ```bash
 git clone https://github.com/ngavilan-dogfy/woffux.git
-cd woffux-cli
+cd woffux
 go build -o woffux ./cmd/woffux
 sudo mv woffux /usr/local/bin/
 ```
@@ -77,12 +77,14 @@ sudo mv woffux /usr/local/bin/
 
 ### Prerequisites
 
-The [GitHub CLI](https://cli.github.com) is needed for auto-signing. The setup wizard checks for it and guides you through installation if missing.
+[**Git**](https://git-scm.com) is required for setup and syncing workflows to your fork.
+
+The [**GitHub CLI**](https://cli.github.com) is needed for auto-signing. The setup wizard checks for it and guides you through installation if missing.
 
 ```bash
-brew install gh        # macOS
-sudo apt install gh    # Debian/Ubuntu
-sudo dnf install gh    # Fedora
+brew install git gh        # macOS
+sudo apt install git gh    # Debian/Ubuntu
+sudo dnf install git gh    # Fedora
 ```
 
 Then: `gh auth login`
@@ -265,7 +267,7 @@ Your local config (`~/.woffux.yaml`) is the source of truth. Run `woffux sync` t
 ```bash
 woffux sync
 
-  Syncing local config → yourusername/woffux-cli
+  Syncing local config → yourusername/woffux
 
   ✓ Secrets               email, password, office (41.35,2.14), home (41.19,1.60)
   ✓ Workflows             5 days, 3 signs/day, tz=CET

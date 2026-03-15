@@ -124,6 +124,44 @@ func (c *calendarGrid) moveDown() {
 	}
 }
 
+// Range selection: move + select both origin and destination
+
+func (c *calendarGrid) moveLeftSelect() {
+	if c.cursor > 1 {
+		c.selected[c.cursor] = true
+		c.cursor--
+		c.selected[c.cursor] = true
+	}
+}
+
+func (c *calendarGrid) moveRightSelect() {
+	if c.cursor < c.daysInMonth() {
+		c.selected[c.cursor] = true
+		c.cursor++
+		c.selected[c.cursor] = true
+	}
+}
+
+func (c *calendarGrid) moveUpSelect() {
+	if c.cursor > 7 {
+		start := c.cursor
+		c.cursor -= 7
+		for d := c.cursor; d <= start; d++ {
+			c.selected[d] = true
+		}
+	}
+}
+
+func (c *calendarGrid) moveDownSelect() {
+	if c.cursor+7 <= c.daysInMonth() {
+		start := c.cursor
+		c.cursor += 7
+		for d := start; d <= c.cursor; d++ {
+			c.selected[d] = true
+		}
+	}
+}
+
 func (c *calendarGrid) prevMonth() {
 	if c.month == time.January {
 		c.month = time.December

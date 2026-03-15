@@ -21,12 +21,12 @@ import (
 
 const (
 	tabStatus   = 0
-	tabEvents   = 1
-	tabCalendar = 2
+	tabCalendar = 1
+	tabEvents   = 2
 	tabCount    = 3
 )
 
-var tabNames = [tabCount]string{"Status", "Events", "Calendar"}
+var tabNames = [tabCount]string{"Status", "Calendar", "Events"}
 
 // ── Messages ──
 
@@ -293,6 +293,7 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ── Calendar tab keys ──
 	if d.activeTab == tabCalendar && d.cal != nil && d.overlay == overlayNone {
 		switch key {
+		// Navigation
 		case "left", "h":
 			d.cal.moveLeft()
 			return d, nil
@@ -305,20 +306,40 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "down", "j":
 			d.cal.moveDown()
 			return d, nil
+
+		// Range selection (shift+arrows)
+		case "shift+left":
+			d.cal.moveLeftSelect()
+			return d, nil
+		case "shift+right":
+			d.cal.moveRightSelect()
+			return d, nil
+		case "shift+up":
+			d.cal.moveUpSelect()
+			return d, nil
+		case "shift+down":
+			d.cal.moveDownSelect()
+			return d, nil
+
+		// Single toggle / clear
 		case " ":
 			d.cal.toggleSelect(d.cal.cursor)
 			return d, nil
 		case "x":
 			d.cal.clearSelection()
 			return d, nil
-		case "[":
+
+		// Month navigation
+		case "[", "H":
 			d.cal.prevMonth()
 			d.loading = true
 			return d, d.fetchData()
-		case "]":
+		case "]", "L":
 			d.cal.nextMonth()
 			d.loading = true
 			return d, d.fetchData()
+
+		// Actions
 		case "enter":
 			if len(d.cal.selected) > 0 {
 				d.overlay = overlayCalAction
@@ -666,9 +687,10 @@ func (d *Dashboard) renderHelp() string {
 		hints = []string{
 			hint("←→↑↓", "navigate"),
 			hint("space", "select"),
-			hint("[/]", "month"),
+			hint("⇧+arrows", "range"),
+			hint("H/L", "month"),
 			hint("x", "clear"),
-			hint("enter", "day action"),
+			hint("enter", "action"),
 		}
 	}
 
