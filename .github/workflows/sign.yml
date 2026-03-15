@@ -1,0 +1,44 @@
+name: Auto Sign
+
+on:
+  schedule:
+    # Monday-Thursday
+    - cron: '30 7 * * 1-4'   # 08:30 CET
+    - cron: '30 12 * * 1-4'  # 13:30 CET
+    - cron: '15 13 * * 1-4'  # 14:15 CET
+    - cron: '30 16 * * 1-4'  # 17:30 CET
+    # Friday
+    - cron: '0 7 * * 5'      # 08:00 CET
+    - cron: '0 14 * * 5'     # 15:00 CET
+
+concurrency:
+  group: sign
+  cancel-in-progress: true
+
+jobs:
+  sign:
+    name: Sign in Woffu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install woffuk
+        run: go install github.com/ngavilan-dogfy/woffuk-cli@latest
+
+      - name: Random delay (2-5 min)
+        run: sleep $(( RANDOM % 181 + 120 ))
+
+      - name: Sign
+        run: woffuk sign
+        env:
+          WOFFU_URL: ${{ secrets.WOFFU_URL }}
+          WOFFU_COMPANY_URL: ${{ secrets.WOFFU_COMPANY_URL }}
+          WOFFU_EMAIL: ${{ secrets.WOFFU_EMAIL }}
+          WOFFU_PASSWORD: ${{ secrets.WOFFU_PASSWORD }}
+          WOFFU_LATITUDE: ${{ secrets.WOFFU_LATITUDE }}
+          WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
+          WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
+          WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}

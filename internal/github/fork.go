@@ -10,7 +10,7 @@ import (
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/config"
 )
 
-const upstreamRepo = "paucasanellas/woffuk"
+const upstreamRepo = "ngavilan-dogfy/woffuk-cli"
 
 // ForkAndSetup forks the upstream repo, sets secrets, generates workflows, and pushes.
 func ForkAndSetup(cfg *config.Config, password string) (string, error) {
@@ -18,7 +18,7 @@ func ForkAndSetup(cfg *config.Config, password string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	forkName := username + "/woffuk"
+	forkName := username + "/woffuk-cli"
 
 	// Fork the repo (may already exist)
 	_ = ghRun("repo", "fork", upstreamRepo, "--clone=false")

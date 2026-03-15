@@ -1,0 +1,33 @@
+name: Manual Sign
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sign
+  cancel-in-progress: true
+
+jobs:
+  sign:
+    name: Sign in Woffu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install woffuk
+        run: go install github.com/ngavilan-dogfy/woffuk-cli@latest
+
+      - name: Sign
+        run: woffuk sign
+        env:
+          WOFFU_URL: ${{ secrets.WOFFU_URL }}
+          WOFFU_COMPANY_URL: ${{ secrets.WOFFU_COMPANY_URL }}
+          WOFFU_EMAIL: ${{ secrets.WOFFU_EMAIL }}
+          WOFFU_PASSWORD: ${{ secrets.WOFFU_PASSWORD }}
+          WOFFU_LATITUDE: ${{ secrets.WOFFU_LATITUDE }}
+          WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
+          WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
+          WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
