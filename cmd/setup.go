@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -39,6 +40,11 @@ var setupCmd = &cobra.Command{
 
 func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(sTitle.Render("woffuk setup"))
+
+	// Check gh is installed
+	if err := checkGhInstalled(); err != nil {
+		return err
+	}
 
 	// Load existing config for pre-filling (if any)
 	existing, _ := config.Load()
@@ -583,6 +589,93 @@ func parseDayInput(input string) config.DaySchedule {
 		}
 	}
 	return config.DaySchedule{Enabled: true, Times: times}
+}
+
+// checkGhInstalled verifies gh CLI is available and authenticated.
+func checkGhInstalled() error {
+	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+
+	// Check if gh is installed
+	_, err := exec.LookPath("gh")
+	if err != nil {
+		fmt.Println()
+		fmt.Printf("  %s GitHub CLI (gh) is not installed.\n\n", sErr.Render("✗"))
+		fmt.Printf("  woffuk needs %s to set up auto-signing via GitHub Actions.\n\n", sBold.Render("gh"))
+
+		detected := detectOS()
+
+		fmt.Println("  Install it:")
+		switch detected {
+		case "mac":
+			fmt.Printf("    %s\n\n", sBold.Render("brew install gh"))
+		case "debian":
+			fmt.Printf("    %s\n\n", sBold.Render("sudo apt install gh"))
+		case "fedora":
+			fmt.Printf("    %s\n\n", sBold.Render("sudo dnf install gh"))
+		default:
+			fmt.Printf("    %s\n\n", sBold.Render("https://cli.github.com"))
+		}
+
+		fmt.Printf("  Then authenticate: %s\n\n", sBold.Render("gh auth login"))
+		return fmt.Errorf("gh CLI required — install it and run 'woffuk setup' again")
+	}
+
+	// Check if gh is authenticated
+	authOut, authErr := exec.Command("gh", "auth", "status").CombinedOutput()
+	if authErr != nil {
+		fmt.Println()
+		fmt.Printf("  %s GitHub CLI is installed but not authenticated.\n\n", sErr.Render("✗"))
+		fmt.Printf("  Run: %s\n\n", sBold.Render("gh auth login"))
+
+		var doLogin bool
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Run 'gh auth login' now?").
+					Affirmative("Yes").
+					Negative("I'll do it later").
+					Value(&doLogin),
+			),
+		).Run()
+
+		if doLogin {
+			loginCmd := exec.Command("gh", "auth", "login")
+			loginCmd.Stdin = os.Stdin
+			loginCmd.Stdout = os.Stdout
+			loginCmd.Stderr = os.Stderr
+			if err := loginCmd.Run(); err != nil {
+				return fmt.Errorf("gh auth login failed — try manually and run 'woffuk setup' again")
+			}
+			fmt.Println()
+		} else {
+			return fmt.Errorf("run 'gh auth login' first, then 'woffuk setup'")
+		}
+	}
+	_ = authOut
+
+	fmt.Printf("  %s GitHub CLI ready\n\n", sOk)
+	return nil
+}
+
+func detectOS() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "mac"
+	case "linux":
+		// Try to detect distro
+		if data, err := os.ReadFile("/etc/os-release"); err == nil {
+			s := string(data)
+			if strings.Contains(s, "Ubuntu") || strings.Contains(s, "Debian") {
+				return "debian"
+			}
+			if strings.Contains(s, "Fedora") || strings.Contains(s, "Red Hat") {
+				return "fedora"
+			}
+		}
+		return "linux"
+	default:
+		return runtime.GOOS
+	}
 }
 
 // telegramSetup guides the user through Telegram bot configuration.
