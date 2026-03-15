@@ -1,7 +1,10 @@
 <p align="center">
-  <h1 align="center">woffuk</h1>
-  <p align="center">Automatic clock in/out for <a href="https://app.woffu.com">Woffu</a>. Set it up once, never think about it again.</p>
+  <img src="assets/logo.png" alt="woffuk" width="280">
 </p>
+
+<h1 align="center">woffuk</h1>
+
+<p align="center">Automatic clock in/out for <a href="https://app.woffu.com">Woffu</a>. Set it up once, never think about it again.</p>
 
 <p align="center">
   <a href="https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest"><img src="https://img.shields.io/github/v/release/ngavilan-dogfy/woffuk-cli?style=flat-square&color=7c3aed&label=release" alt="Release"></a>
