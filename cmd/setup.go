@@ -103,24 +103,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	// ── Step 5: Schedule ───────────────────────────────────────────
 
-	var useDefaultSchedule bool
-	huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Use default schedule?").
-				Description("Mon-Thu: 08:30, 13:30, 14:15, 17:30 | Fri: 08:00, 15:00").
-				Affirmative("Yes").
-				Negative("Customize").
-				Value(&useDefaultSchedule),
-		).Title("Auto-sign schedule"),
-	).Run()
-
-	schedule := config.DefaultSchedule()
-	zone, _ := time.Now().Zone()
-	tz := zone
-
-	if !useDefaultSchedule {
-		schedule, tz, _ = customScheduleForm(zone)
+	schedule, tz, err := scheduleWizard()
+	if err != nil {
+		return err
 	}
 
 	// ── Step 6: Telegram ───────────────────────────────────────────
@@ -328,28 +313,211 @@ func locationPicker(title string) (float64, float64, error) {
 	}
 }
 
-func customScheduleForm(defaultTz string) (config.Schedule, string, error) {
-	var monTimes, tueTimes, wedTimes, thuTimes, friTimes, tz string
-	tz = defaultTz
+func scheduleWizard() (config.Schedule, string, error) {
+	sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))   // green
+	sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196")) // red
 
-	huh.NewForm(
+	zone, _ := time.Now().Zone()
+
+	var preset string
+	err := huh.NewForm(
 		huh.NewGroup(
-			huh.NewInput().Title("Timezone").Value(&tz),
-			huh.NewInput().Title("Monday").Description("HH:MM,HH:MM or 'off'").Placeholder("08:30, 13:30, 14:15, 17:30").Value(&monTimes),
-			huh.NewInput().Title("Tuesday").Placeholder("08:30, 13:30, 14:15, 17:30").Value(&tueTimes),
-			huh.NewInput().Title("Wednesday").Placeholder("08:30, 13:30, 14:15, 17:30").Value(&wedTimes),
-			huh.NewInput().Title("Thursday").Placeholder("08:30, 13:30, 14:15, 17:30").Value(&thuTimes),
-			huh.NewInput().Title("Friday").Placeholder("08:00, 15:00").Value(&friTimes),
-		).Title("Custom schedule"),
+			huh.NewSelect[string]().
+				Title("Auto-sign schedule").
+				Options(
+					huh.NewOption(
+						fmt.Sprintf("Standard split (8.5h)   %s 08:30  %s 13:30  %s 14:15  %s 17:30",
+							sIn.Render("IN"), sOut.Render("OUT"), sIn.Render("IN"), sOut.Render("OUT")),
+						"standard",
+					),
+					huh.NewOption(
+						fmt.Sprintf("Intensive (6h)          %s 08:00  %s 14:00",
+							sIn.Render("IN"), sOut.Render("OUT")),
+						"intensive",
+					),
+					huh.NewOption(
+						fmt.Sprintf("Morning shift (7h)      %s 07:00  %s 14:00",
+							sIn.Render("IN"), sOut.Render("OUT")),
+						"morning",
+					),
+					huh.NewOption(
+						fmt.Sprintf("Flexible (8h)           %s 09:00  %s 14:00  %s 15:00  %s 18:00",
+							sIn.Render("IN"), sOut.Render("OUT"), sIn.Render("IN"), sOut.Render("OUT")),
+						"flexible",
+					),
+					huh.NewOption("Custom — define your own blocks", "custom"),
+				).
+				Value(&preset),
+		),
 	).Run()
+	if err != nil {
+		return config.Schedule{}, "", err
+	}
+
+	var schedule config.Schedule
+
+	switch preset {
+	case "standard":
+		schedule = config.Schedule{
+			Monday:    dayWith("08:30", "13:30", "14:15", "17:30"),
+			Tuesday:   dayWith("08:30", "13:30", "14:15", "17:30"),
+			Wednesday: dayWith("08:30", "13:30", "14:15", "17:30"),
+			Thursday:  dayWith("08:30", "13:30", "14:15", "17:30"),
+			Friday:    dayWith("08:00", "15:00"),
+		}
+	case "intensive":
+		schedule = config.Schedule{
+			Monday:    dayWith("08:00", "14:00"),
+			Tuesday:   dayWith("08:00", "14:00"),
+			Wednesday: dayWith("08:00", "14:00"),
+			Thursday:  dayWith("08:00", "14:00"),
+			Friday:    dayWith("08:00", "14:00"),
+		}
+	case "morning":
+		schedule = config.Schedule{
+			Monday:    dayWith("07:00", "14:00"),
+			Tuesday:   dayWith("07:00", "14:00"),
+			Wednesday: dayWith("07:00", "14:00"),
+			Thursday:  dayWith("07:00", "14:00"),
+			Friday:    dayWith("07:00", "14:00"),
+		}
+	case "flexible":
+		schedule = config.Schedule{
+			Monday:    dayWith("09:00", "14:00", "15:00", "18:00"),
+			Tuesday:   dayWith("09:00", "14:00", "15:00", "18:00"),
+			Wednesday: dayWith("09:00", "14:00", "15:00", "18:00"),
+			Thursday:  dayWith("09:00", "14:00", "15:00", "18:00"),
+			Friday:    dayWith("08:00", "15:00"),
+		}
+	case "custom":
+		schedule, err = customScheduleBlocks(sIn, sOut)
+		if err != nil {
+			return config.Schedule{}, "", err
+		}
+	}
+
+	// Show summary
+	fmt.Println()
+	printScheduleVisual(schedule, sIn, sOut)
+	fmt.Println()
+
+	return schedule, zone, nil
+}
+
+func customScheduleBlocks(sIn, sOut lipgloss.Style) (config.Schedule, error) {
+	fmt.Println()
+	fmt.Printf("  Define time blocks as %s/%s pairs.\n", sIn.Render("IN"), sOut.Render("OUT"))
+	fmt.Printf("  Each pair = one clock in + one clock out.\n\n")
+
+	// Mon-Thu block
+	fmt.Println(sBold.Render("  Monday — Thursday"))
+	monThu, err := editBlocks(sIn, sOut, "08:30", "13:30", "14:15", "17:30")
+	if err != nil {
+		return config.Schedule{}, err
+	}
+
+	// Friday
+	fmt.Println(sBold.Render("  Friday"))
+	fri, err := editBlocks(sIn, sOut, "08:00", "15:00")
+	if err != nil {
+		return config.Schedule{}, err
+	}
 
 	return config.Schedule{
-		Monday:    parseDayInput(monTimes),
-		Tuesday:   parseDayInput(tueTimes),
-		Wednesday: parseDayInput(wedTimes),
-		Thursday:  parseDayInput(thuTimes),
-		Friday:    parseDayInput(friTimes),
-	}, tz, nil
+		Monday:    monThu,
+		Tuesday:   monThu,
+		Wednesday: monThu,
+		Thursday:  monThu,
+		Friday:    fri,
+	}, nil
+}
+
+func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedule, error) {
+	// defaults come in pairs: in, out, in, out...
+	numBlocks := len(defaults) / 2
+	if numBlocks == 0 {
+		numBlocks = 1
+	}
+
+	times := make([]string, len(defaults))
+	copy(times, defaults)
+
+	// Ensure we have at least 2 values
+	for len(times) < 2 {
+		times = append(times, "")
+	}
+
+	fields := make([]huh.Field, 0, len(times))
+	for i := range times {
+		label := sIn.Render("▶ IN ")
+		if i%2 == 1 {
+			label = sOut.Render("■ OUT")
+		}
+		blockNum := (i / 2) + 1
+		title := fmt.Sprintf("%s  Block %d", label, blockNum)
+
+		idx := i // capture
+		fields = append(fields, huh.NewInput().
+			Title(title).
+			Placeholder("HH:MM").
+			Value(&times[idx]).
+			Validate(func(s string) error {
+				if s == "" {
+					return fmt.Errorf("enter a time like 08:30")
+				}
+				if len(s) != 5 || s[2] != ':' {
+					return fmt.Errorf("format: HH:MM")
+				}
+				return nil
+			}))
+	}
+
+	group := huh.NewGroup(fields...)
+	err := huh.NewForm(group).Run()
+	if err != nil {
+		return config.DaySchedule{}, err
+	}
+
+	var entries []config.ScheduleEntry
+	for _, t := range times {
+		if t != "" {
+			entries = append(entries, config.ScheduleEntry{Time: t})
+		}
+	}
+
+	return config.DaySchedule{Enabled: true, Times: entries}, nil
+}
+
+func dayWith(times ...string) config.DaySchedule {
+	entries := make([]config.ScheduleEntry, len(times))
+	for i, t := range times {
+		entries[i] = config.ScheduleEntry{Time: t}
+	}
+	return config.DaySchedule{Enabled: true, Times: entries}
+}
+
+func printScheduleVisual(s config.Schedule, sIn, sOut lipgloss.Style) {
+	printDayVisual("Mon", s.Monday, sIn, sOut)
+	printDayVisual("Tue", s.Tuesday, sIn, sOut)
+	printDayVisual("Wed", s.Wednesday, sIn, sOut)
+	printDayVisual("Thu", s.Thursday, sIn, sOut)
+	printDayVisual("Fri", s.Friday, sIn, sOut)
+}
+
+func printDayVisual(name string, day config.DaySchedule, sIn, sOut lipgloss.Style) {
+	if !day.Enabled {
+		fmt.Printf("  %s  off\n", name)
+		return
+	}
+	fmt.Printf("  %s  ", name)
+	for i, t := range day.Times {
+		if i%2 == 0 {
+			fmt.Printf("%s %s  ", sIn.Render("▶"), t.Time)
+		} else {
+			fmt.Printf("%s %s  ", sOut.Render("■"), t.Time)
+		}
+	}
+	fmt.Println()
 }
 
 func parseDayInput(input string) config.DaySchedule {
@@ -746,22 +914,7 @@ func extractCompany(email string) string {
 }
 
 func printSetupSchedule(s config.Schedule) {
-	days := []struct {
-		name string
-		day  config.DaySchedule
-	}{
-		{"Mon", s.Monday}, {"Tue", s.Tuesday}, {"Wed", s.Wednesday},
-		{"Thu", s.Thursday}, {"Fri", s.Friday},
-	}
-	for _, d := range days {
-		if !d.day.Enabled {
-			fmt.Printf("  %s: off\n", d.name)
-			continue
-		}
-		var times []string
-		for _, t := range d.day.Times {
-			times = append(times, t.Time)
-		}
-		fmt.Printf("  %s: %s\n", d.name, strings.Join(times, ", "))
-	}
+	sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	printScheduleVisual(s, sIn, sOut)
 }
