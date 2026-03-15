@@ -33,6 +33,7 @@ type dataMsg struct {
 	signInfo *woffu.SignInfo
 	events   []woffu.AvailableUserEvent
 	profile  *woffu.UserProfile
+	slots    []woffu.SignSlot
 }
 type errMsg struct{ err error }
 type signDoneMsg struct{}
@@ -74,6 +75,7 @@ type Dashboard struct {
 	signInfo   *woffu.SignInfo
 	events     []woffu.AvailableUserEvent
 	profile    *woffu.UserProfile
+	slots      []woffu.SignSlot
 	autoActive *bool // nil = unknown
 	err        error
 
@@ -122,11 +124,12 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.signInfo = msg.signInfo
 		d.events = msg.events
 		d.profile = msg.profile
+		d.slots = msg.slots
 
 	case signDoneMsg:
 		d.signing = false
-		d.setFlash("Signed successfully!", false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+		d.setFlash("Signed successfully! Data refreshing...", false)
+		return d, tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.clearFlashAfter(3*time.Second))
 
 	case autoToggleMsg:
 		v := msg.enabled
@@ -245,9 +248,16 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d, tea.Batch(d.fetchData(), d.fetchAutoStatus())
 	case "o":
 		openBrowserCmd(d.cfg.WoffuCompanyURL + "/v2")
+		d.setFlash("Opened Woffu in browser", false)
+		return d, d.clearFlashAfter(2 * time.Second)
 	case "g":
 		if d.cfg.GithubFork != "" {
 			openBrowserCmd("https://github.com/" + d.cfg.GithubFork + "/actions")
+			d.setFlash("Opened GitHub Actions in browser", false)
+			return d, d.clearFlashAfter(2 * time.Second)
+		} else {
+			d.setFlash("GitHub not configured — run woffuk setup", true)
+			return d, d.clearFlashAfter(3 * time.Second)
 		}
 	}
 
@@ -373,7 +383,15 @@ func (d *Dashboard) renderStatusTab() string {
 			rows = append(rows, sLabel.Render("Coordinates")+sDimmed.Render(fmt.Sprintf("%.4f, %.4f", info.Latitude, info.Longitude)))
 		}
 
+		// Sign status from slots
+		rows = append(rows, sLabel.Render("Signed")+d.signStatusText())
+
 		parts = append(parts, "\n"+sBox.Render(strings.Join(rows, "\n")))
+	}
+
+	// Today's slots
+	if len(d.slots) > 0 {
+		parts = append(parts, d.renderSlots())
 	}
 
 	// Schedule
@@ -383,6 +401,53 @@ func (d *Dashboard) renderStatusTab() string {
 	parts = append(parts, d.renderAutoSign())
 
 	return strings.Join(parts, "\n")
+}
+
+func (d *Dashboard) signStatusText() string {
+	if len(d.slots) == 0 {
+		return sDanger.Render("not signed yet")
+	}
+
+	// Check last slot to determine current state
+	lastSlot := d.slots[len(d.slots)-1]
+	if lastSlot.Out != "" {
+		return sSuccess.Render(fmt.Sprintf("clocked out (%d signs)", len(d.slots)*2))
+	}
+	if lastSlot.In != "" {
+		return sSuccess.Render("clocked in")
+	}
+
+	return sDimmed.Render(fmt.Sprintf("%d slots", len(d.slots)))
+}
+
+func (d *Dashboard) renderSlots() string {
+	var rows []string
+	for i, s := range d.slots {
+		in := sDimmed.Render("  —  ")
+		out := sDimmed.Render("  —  ")
+		if s.In != "" {
+			// Extract time from datetime
+			inTime := extractTime(s.In)
+			in = sSignIn.Render("IN") + "  " + sValue.Render(inTime)
+		}
+		if s.Out != "" {
+			outTime := extractTime(s.Out)
+			out = sSignOut.Render("OUT") + " " + sValue.Render(outTime)
+		}
+		rows = append(rows, fmt.Sprintf("    %d. %s   %s", i+1, in, out))
+	}
+	return "\n" + sSubtitle.Render("  Today's signs") + "\n" + strings.Join(rows, "\n")
+}
+
+func extractTime(datetime string) string {
+	// "2026-03-15T08:32:00.000" → "08:32"
+	if idx := strings.Index(datetime, "T"); idx != -1 {
+		time := datetime[idx+1:]
+		if len(time) >= 5 {
+			return time[:5]
+		}
+	}
+	return datetime
 }
 
 // ── Render: Events tab ──
@@ -546,10 +611,16 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 		return d.syncGitHub()
 	case "open":
 		openBrowserCmd(d.cfg.WoffuCompanyURL + "/v2")
+		d.setFlash("Opened Woffu in browser", false)
+		return d.clearFlashAfter(2 * time.Second)
 	case "open-gh":
 		if d.cfg.GithubFork != "" {
 			openBrowserCmd("https://github.com/" + d.cfg.GithubFork + "/actions")
+			d.setFlash("Opened GitHub Actions", false)
+			return d.clearFlashAfter(2 * time.Second)
 		}
+		d.setFlash("GitHub not configured", true)
+		return d.clearFlashAfter(3 * time.Second)
 	default:
 		if strings.HasPrefix(a.key, "preset:") {
 			name := strings.TrimPrefix(a.key, "preset:")
@@ -627,7 +698,9 @@ func (d *Dashboard) fetchData() tea.Cmd {
 			return errMsg{err}
 		}
 
-		return dataMsg{signInfo: info, events: events, profile: profile}
+		slots, _ := woffu.GetTodaySlots(d.companyClient, token)
+
+		return dataMsg{signInfo: info, events: events, profile: profile, slots: slots}
 	}
 }
 
