@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -14,6 +17,8 @@ import (
 )
 
 var Version = "dev"
+
+const releasesAPI = "https://api.github.com/repos/ngavilan-dogfy/woffux/releases/latest"
 
 var updateCmd = &cobra.Command{
 	Use:   "update",
@@ -30,19 +35,12 @@ var updateCmd = &cobra.Command{
 		spinner.New().
 			Title("Checking for updates...").
 			Action(func() {
-				out, err := exec.Command("gh", "api",
-					"repos/ngavilan-dogfy/woffux/releases/latest",
-					"--jq", ".tag_name").Output()
-				if err != nil {
-					checkErr = err
-					return
-				}
-				latestTag = strings.TrimSpace(string(out))
+				latestTag, checkErr = fetchLatestTag()
 			}).
 			Run()
 
 		if checkErr != nil {
-			fmt.Printf("  %s Could not check for updates.\n\n", sWarn)
+			fmt.Printf("  %s Could not check for updates: %s\n\n", sWarn, checkErr)
 			return nil
 		}
 
@@ -76,12 +74,7 @@ var updateCmd = &cobra.Command{
 		spinner.New().
 			Title(fmt.Sprintf("Downloading %s...", latestTag)).
 			Action(func() {
-				dl := exec.Command("curl", "-fsSL", url, "-o", "/tmp/woffux-update")
-				if out, err := dl.CombinedOutput(); err != nil {
-					downloadErr = fmt.Errorf("download failed: %s", string(out))
-					return
-				}
-				exec.Command("chmod", "+x", "/tmp/woffux-update").Run()
+				downloadErr = downloadFile("/tmp/woffux-update", url)
 			}).
 			Run()
 
@@ -90,6 +83,8 @@ var updateCmd = &cobra.Command{
 				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), downloadErr)
 			return nil
 		}
+
+		os.Chmod("/tmp/woffux-update", 0755)
 
 		// Install — needs to happen outside spinner so sudo can prompt
 		currentPath, err := os.Executable()
@@ -117,6 +112,63 @@ var updateCmd = &cobra.Command{
 		fmt.Printf("\n  %s Updated to %s\n\n", sOk, sBold.Render(latestTag))
 		return nil
 	},
+}
+
+// fetchLatestTag queries the GitHub API directly (no gh CLI needed).
+func fetchLatestTag() (string, error) {
+	req, err := http.NewRequest("GET", releasesAPI, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("cannot reach GitHub: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return "", fmt.Errorf("parse response: %w", err)
+	}
+
+	tag := strings.TrimSpace(release.TagName)
+	if tag == "" {
+		return "", fmt.Errorf("no releases found")
+	}
+	return tag, nil
+}
+
+// downloadFile downloads a URL to a local path using net/http.
+func downloadFile(dst, url string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download returned HTTP %d", resp.StatusCode)
+	}
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create file: %w", err)
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, resp.Body); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	return nil
 }
 
 func goArch() string {
