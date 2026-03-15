@@ -41,8 +41,28 @@ type Config struct {
 	HomeLongitude   float64 `yaml:"home_longitude"`
 	GithubFork      string  `yaml:"github_fork,omitempty"`
 	Timezone        string  `yaml:"timezone"`
-	Schedule        Schedule       `yaml:"schedule"`
-	Telegram        TelegramConfig `yaml:"telegram,omitempty"`
+	Schedule        Schedule            `yaml:"schedule"`
+	SavedSchedules  map[string]Schedule `yaml:"saved_schedules,omitempty"`
+	ActiveSchedule  string              `yaml:"active_schedule,omitempty"`
+	Telegram        TelegramConfig      `yaml:"telegram,omitempty"`
+}
+
+// SaveSchedulePreset saves a schedule with a name.
+func (c *Config) SaveSchedulePreset(name string, s Schedule) {
+	if c.SavedSchedules == nil {
+		c.SavedSchedules = make(map[string]Schedule)
+	}
+	c.SavedSchedules[name] = s
+}
+
+// LoadSchedulePreset applies a saved schedule preset.
+func (c *Config) LoadSchedulePreset(name string) bool {
+	if s, ok := c.SavedSchedules[name]; ok {
+		c.Schedule = s
+		c.ActiveSchedule = name
+		return true
+	}
+	return false
 }
 
 // DefaultSchedule returns the default signing schedule.

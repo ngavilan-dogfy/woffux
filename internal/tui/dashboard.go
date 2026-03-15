@@ -358,6 +358,17 @@ func (d *Dashboard) getActions() []action {
 		}
 	}
 
+	// Add saved schedule switching
+	if d.cfg.SavedSchedules != nil && len(d.cfg.SavedSchedules) > 0 {
+		for name := range d.cfg.SavedSchedules {
+			label := fmt.Sprintf("Switch to \"%s\" schedule", name)
+			if name == d.cfg.ActiveSchedule {
+				label += " (current)"
+			}
+			actions = append(actions, action{key: "preset:" + name, name: label, desc: "Apply saved schedule preset"})
+		}
+	}
+
 	actions = append(actions,
 		action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"},
 		action{key: "open", name: "Open Woffu", desc: "Open Woffu in browser"},
@@ -382,6 +393,11 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 	case "open-gh":
 		if d.cfg.GithubFork != "" {
 			openBrowserCmd("https://github.com/" + d.cfg.GithubFork + "/actions")
+		}
+	default:
+		if strings.HasPrefix(a.key, "preset:") {
+			name := strings.TrimPrefix(a.key, "preset:")
+			return d.applyPreset(name)
 		}
 	}
 	return nil
@@ -551,6 +567,22 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 		}
 		if err := gh.SyncWorkflows(d.cfg); err != nil {
 			return errMsg{fmt.Errorf("sync workflows: %w", err)}
+		}
+		return syncDoneMsg{}
+	}
+}
+
+func (d *Dashboard) applyPreset(name string) tea.Cmd {
+	return func() tea.Msg {
+		if !d.cfg.LoadSchedulePreset(name) {
+			return errMsg{fmt.Errorf("preset \"%s\" not found", name)}
+		}
+		if err := config.Save(d.cfg); err != nil {
+			return errMsg{fmt.Errorf("save config: %w", err)}
+		}
+		// Sync workflows if github is configured
+		if d.cfg.GithubFork != "" {
+			gh.SyncWorkflows(d.cfg)
 		}
 		return syncDoneMsg{}
 	}
