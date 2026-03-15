@@ -13,7 +13,7 @@ func DoSign(companyClient *Client, token string, lat, lon float64) error {
 		Latitude:         lat,
 		Longitude:        lon,
 		RequestID:        nil,
-		TimezoneOffset:   timezoneOffset(),
+		TimezoneOffset:   currentTimezoneOffset(),
 	}
 
 	err := companyClient.doJSON("POST", "/api/svc/signs/signs", body, map[string]string{
@@ -26,7 +26,14 @@ func DoSign(companyClient *Client, token string, lat, lon float64) error {
 	return nil
 }
 
-func timezoneOffset() int {
-	_, offset := time.Now().Zone()
+func currentTimezoneOffset() int {
+	// Try to use Europe/Madrid for consistent offset
+	loc, err := time.LoadLocation("Europe/Madrid")
+	if err != nil {
+		// Fallback to local timezone
+		_, offset := time.Now().Zone()
+		return -(offset / 60)
+	}
+	_, offset := time.Now().In(loc).Zone()
 	return -(offset / 60)
 }

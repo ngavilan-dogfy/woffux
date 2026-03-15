@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Download woffuk
         run: |
-          curl -sL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
+          curl -fsSL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
           chmod +x woffuk
 
       - name: Random delay (2-5 min)

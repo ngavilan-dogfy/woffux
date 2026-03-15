@@ -1,7 +1,6 @@
 package github
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -64,6 +63,7 @@ func EnableAutoSign(repo string) error {
 		return err
 	}
 
+	changed := 0
 	for _, w := range workflows {
 		if strings.Contains(w.Name, "Sign") || strings.Contains(w.Name, "Keepalive") {
 			err := ghRun("api", "-X", "PUT",
@@ -71,7 +71,12 @@ func EnableAutoSign(repo string) error {
 			if err != nil {
 				return fmt.Errorf("enable %s: %w", w.Name, err)
 			}
+			changed++
 		}
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("no sign workflows found on %s — run 'woffuk setup' first", repo)
 	}
 
 	return nil
@@ -84,16 +89,20 @@ func DisableAutoSign(repo string) error {
 		return err
 	}
 
+	changed := 0
 	for _, w := range workflows {
 		if strings.Contains(w.Name, "Sign") || strings.Contains(w.Name, "Keepalive") {
-			body, _ := json.Marshal(map[string]string{})
-			_ = body
 			err := ghRun("api", "-X", "PUT",
 				fmt.Sprintf("repos/%s/actions/workflows/%d/disable", repo, w.ID))
 			if err != nil {
 				return fmt.Errorf("disable %s: %w", w.Name, err)
 			}
+			changed++
 		}
+	}
+
+	if changed == 0 {
+		return fmt.Errorf("no sign workflows found on %s — run 'woffuk setup' first", repo)
 	}
 
 	return nil

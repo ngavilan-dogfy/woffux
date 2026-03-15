@@ -112,6 +112,13 @@ func LoadOrEnv() (*Config, string, error) {
 	homeLat, _ := strconv.ParseFloat(os.Getenv("WOFFU_HOME_LATITUDE"), 64)
 	homeLon, _ := strconv.ParseFloat(os.Getenv("WOFFU_HOME_LONGITUDE"), 64)
 
+	if lat == 0 && lon == 0 {
+		return nil, "", fmt.Errorf("WOFFU_LATITUDE/WOFFU_LONGITUDE not set — configure GPS coordinates")
+	}
+	if homeLat == 0 && homeLon == 0 {
+		return nil, "", fmt.Errorf("WOFFU_HOME_LATITUDE/WOFFU_HOME_LONGITUDE not set — configure home GPS coordinates")
+	}
+
 	return &Config{
 		WoffuURL:        url,
 		WoffuCompanyURL: companyURL,

@@ -48,7 +48,9 @@ func getMode(event *WoffuCalendarEvent) SignMode {
 		return SignModeOffice
 	}
 
-	allPresence := append(event.Event.PresenceEvents, event.Event.PresencePendingEvents...)
+	allPresence := make([]presenceEvent, 0, len(event.Event.PresenceEvents)+len(event.Event.PresencePendingEvents))
+	allPresence = append(allPresence, event.Event.PresenceEvents...)
+	allPresence = append(allPresence, event.Event.PresencePendingEvents...)
 	for _, e := range allPresence {
 		if strings.Contains(strings.ToLower(e.AgreementEvent), "teletrabajo") {
 			return SignModeRemote
@@ -60,7 +62,7 @@ func getMode(event *WoffuCalendarEvent) SignMode {
 
 func getIsWorkingDay(event *WoffuCalendarEvent) bool {
 	if event == nil {
-		return true
+		return false // Safe default: don't sign if calendar data is missing
 	}
 
 	return !event.IsWeekend &&

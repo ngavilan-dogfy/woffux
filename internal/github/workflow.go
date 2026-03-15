@@ -107,7 +107,7 @@ jobs:
     steps:
       - name: Download woffuk
         run: |
-          curl -sL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
+          curl -fsSL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
           chmod +x woffuk
 
       - name: Random delay (2-5 min)
@@ -147,7 +147,7 @@ jobs:
     steps:
       - name: Download woffuk
         run: |
-          curl -sL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
+          curl -fsSL "https://github.com/ngavilan-dogfy/woffuk-cli/releases/latest/download/woffuk-linux-amd64" -o woffuk
           chmod +x woffuk
 
       - name: Sign
@@ -181,7 +181,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
       - name: Keepalive commit
         run: |
           git config user.name "github-actions[bot]"

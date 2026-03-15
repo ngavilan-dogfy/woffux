@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 type Client struct {
@@ -18,7 +19,7 @@ type Client struct {
 func NewWoffuClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
 			"Accept-Language": "es,es-ES;q=0.9",
@@ -35,7 +36,7 @@ func NewWoffuClient(baseURL string) *Client {
 func NewCompanyClient(companyURL string) *Client {
 	return &Client{
 		baseURL:    strings.TrimRight(companyURL, "/"),
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
 			"Accept-Language": "es,es-ES;q=0.9",
