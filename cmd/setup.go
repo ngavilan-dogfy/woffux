@@ -160,9 +160,8 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			}
 			officeLat, officeLon = lat, lon
 		} else {
-			// Fallback: ask manually
-			fmt.Println("  Could not auto-detect. Enter the office address:")
-			lat, lon, err := locationPicker("Office location")
+			// Fallback: manual pick
+			lat, lon, err := locationPickerWithMap("Office location", 41.39, 2.17)
 			if err != nil {
 				return err
 			}
@@ -174,7 +173,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	// ── Step 4: Home location ──────────────────────────────────────
 
-	homeLat, homeLon, err := locationPicker("Home location")
+	homeLat, homeLon, err := locationPickerWithMap("Home location", officeLat, officeLon)
 	if err != nil {
 		return err
 	}
@@ -357,6 +356,32 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 	r := results[choice]
 	fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.4f, %.4f", r.Lat, r.Lon)))
 	return r.Lat, r.Lon, nil
+}
+
+func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float64, float64, error) {
+	var useMap bool
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title(title).
+				Description("Pick on a map in your browser, or search by text").
+				Affirmative("Open map").
+				Negative("Search by text").
+				Value(&useMap),
+		),
+	).Run()
+
+	if useMap {
+		fmt.Printf("  %s Opening map in browser...\n", sInfo)
+		result, err := geocode.PickFromMap(title, defaultLat, defaultLon)
+		if err != nil {
+			return 0, 0, err
+		}
+		fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.6f, %.6f", result.Lat, result.Lon)))
+		return result.Lat, result.Lon, nil
+	}
+
+	return locationPicker(title)
 }
 
 func locationPicker(title string) (float64, float64, error) {
