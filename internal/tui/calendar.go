@@ -291,13 +291,18 @@ func (c *calendarGrid) render() string {
 	stats = append(stats, fmt.Sprintf("%d weekends", weekends))
 	b.WriteString("\n    " + sDimmed.Render(strings.Join(stats, " · ")))
 
-	// Color legend (dots only)
+	// Color legend (dots)
 	b.WriteString("\n    ")
 	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Render("●") + sDimmed.Render(" office  "))
 	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Render("●") + sDimmed.Render(" telework  "))
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Render("●") + sDimmed.Render(" holiday  "))
 	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Render("●") + sDimmed.Render(" absence  "))
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("●") + sDimmed.Render(" weekend"))
+
+	// Request status legend
+	b.WriteString("\n    ")
+	b.WriteString(lipgloss.NewStyle().Underline(true).Foreground(colorText).Render("N") + sDimmed.Render(" approved  "))
+	b.WriteString(lipgloss.NewStyle().Italic(true).Foreground(colorText).Render("N") + sDimmed.Render(" pending"))
 
 	// Selected count
 	total := len(c.selected)
@@ -408,7 +413,6 @@ func extractTimeFromDT(dt string) string {
 func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 	info := c.dayInfo(day)
 
-	// Numbers only — no badge letters
 	label := fmt.Sprintf("%2d", day)
 
 	style := lipgloss.NewStyle().Width(cellWidth).Align(lipgloss.Center)
@@ -429,13 +433,30 @@ func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 				style = style.Foreground(colorSuccess)
 			}
 		}
+
+		// Request status: underline=approved, italic=pending
+		hasApproved := false
+		hasPending := false
+		for _, r := range info.Requests {
+			switch r.Status {
+			case "approved":
+				hasApproved = true
+			case "pending":
+				hasPending = true
+			}
+		}
+		if hasApproved {
+			style = style.Underline(true)
+		} else if hasPending {
+			style = style.Italic(true)
+		}
 	} else if col >= 5 {
 		style = style.Foreground(colorDim)
 	}
 
-	// Today highlight
+	// Today highlight (bold only — underline reserved for approved requests)
 	if isToday {
-		style = style.Underline(true).Bold(true)
+		style = style.Bold(true)
 	}
 
 	// Selected
