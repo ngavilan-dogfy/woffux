@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -190,6 +191,30 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			config.Save(cfg)
 			fmt.Printf("  %s Fork: %s\n", sOk, forkName)
 			fmt.Printf("  %s Secrets + workflows configured\n", sOk)
+		}
+	}
+
+	// ── Claude Code skill ─────────────────────────────────────────
+
+	if claudeCodeDetected() {
+		var installSkill bool
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Install Claude Code skill?").
+					Description("Adds /woffux — check status, sign, manage requests from Claude Code").
+					Affirmative("Install").
+					Negative("Skip").
+					Value(&installSkill),
+			),
+		).Run()
+
+		if installSkill {
+			if err := installClaudeSkill(); err != nil {
+				fmt.Printf("  %s Skill install failed: %s\n", sWarn, err)
+			} else {
+				fmt.Printf("  %s Claude Code skill installed. Use %s in any session.\n", sOk, sBold.Render("/woffux"))
+			}
 		}
 	}
 
@@ -1167,4 +1192,33 @@ func printSetupSchedule(s config.Schedule) {
 	sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
 	sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 	printScheduleVisual(s, sIn, sOut)
+}
+
+// claudeCodeDetected returns true if ~/.claude/ exists.
+func claudeCodeDetected() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(home, ".claude"))
+	return err == nil && info.IsDir()
+}
+
+// installClaudeSkill copies the embedded skill to ~/.claude/skills/woffux/.
+func installClaudeSkill() error {
+	dest, err := skillPath()
+	if err != nil {
+		return err
+	}
+
+	data, err := skillFS.ReadFile("skill_data/SKILL.md")
+	if err != nil {
+		return fmt.Errorf("read embedded skill: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return fmt.Errorf("create directory: %w", err)
+	}
+
+	return os.WriteFile(dest, data, 0644)
 }
