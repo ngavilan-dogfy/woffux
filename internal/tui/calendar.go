@@ -434,9 +434,9 @@ func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 			}
 		}
 
-		// Request status: underline=approved, italic=pending
+		// Request/presence status: underline=approved, italic=pending
 		hasApproved := false
-		hasPending := false
+		hasPending := info.HasPendingPresence
 		for _, r := range info.Requests {
 			switch r.Status {
 			case "approved":
@@ -444,6 +444,10 @@ func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 			case "pending":
 				hasPending = true
 			}
+		}
+		// Approved telework from PresenceEvents (mode=remote, not pending)
+		if info.Mode == "remote" && !info.HasPendingPresence {
+			hasApproved = true
 		}
 		if hasApproved {
 			style = style.Underline(true)

@@ -360,4 +360,4 @@ Used by GitHub Actions. Set automatically by `woffux setup`.
 
 ## License
 
-MIT
+[MIT](LICENSE)

@@ -11,11 +11,12 @@ type CalendarDay struct {
 	Date       string   `json:"date"`
 	DayName    string   `json:"day"`
 	Status     string   `json:"status"` // "working", "weekend", "holiday", "absence"
-	Mode       string   `json:"mode"`   // "office", "remote", ""
-	IsHoliday  bool     `json:"is_holiday"`
-	IsWeekend  bool     `json:"is_weekend"`
-	HasAbsence bool     `json:"has_absence"`
-	EventNames []string `json:"events,omitempty"`
+	Mode               string   `json:"mode"`   // "office", "remote", ""
+	IsHoliday          bool     `json:"is_holiday"`
+	IsWeekend          bool     `json:"is_weekend"`
+	HasAbsence         bool     `json:"has_absence"`
+	HasPendingPresence bool     `json:"has_pending_presence,omitempty"`
+	EventNames         []string `json:"events,omitempty"`
 
 	// Rich context data (populated by EnrichCalendarDays)
 	Requests []DayRequest `json:"requests,omitempty"`
@@ -111,14 +112,23 @@ func GetCalendarMonthYM(companyClient *Client, token string, year int, month tim
 		}
 
 		mode := ""
+		hasPendingPresence := false
 		if !e.IsWeekend && !e.Calendar.HasHoliday {
-			allPresence := make([]presenceEvent, 0, len(e.Event.PresenceEvents)+len(e.Event.PresencePendingEvents))
-			allPresence = append(allPresence, e.Event.PresenceEvents...)
-			allPresence = append(allPresence, e.Event.PresencePendingEvents...)
-			for _, p := range allPresence {
+			// Check approved presence events first
+			for _, p := range e.Event.PresenceEvents {
 				if strings.Contains(strings.ToLower(p.AgreementEvent), "teletrabajo") {
 					mode = "remote"
 					break
+				}
+			}
+			// If no approved telework, check pending
+			if mode != "remote" {
+				for _, p := range e.Event.PresencePendingEvents {
+					if strings.Contains(strings.ToLower(p.AgreementEvent), "teletrabajo") {
+						mode = "remote"
+						hasPendingPresence = true
+						break
+					}
 				}
 			}
 			if mode == "" {
@@ -131,14 +141,15 @@ func GetCalendarMonthYM(companyClient *Client, token string, year int, month tim
 		eventNames = append(eventNames, e.Calendar.EventNames...)
 
 		days = append(days, CalendarDay{
-			Date:       date,
-			DayName:    dayName,
-			Status:     status,
-			Mode:       mode,
-			IsHoliday:  e.Calendar.HasHoliday,
-			IsWeekend:  e.IsWeekend,
-			HasAbsence: len(e.Event.AbsenceEvents) > 0,
-			EventNames: eventNames,
+			Date:               date,
+			DayName:            dayName,
+			Status:             status,
+			Mode:               mode,
+			IsHoliday:          e.Calendar.HasHoliday,
+			IsWeekend:          e.IsWeekend,
+			HasAbsence:         len(e.Event.AbsenceEvents) > 0,
+			HasPendingPresence: hasPendingPresence,
+			EventNames:         eventNames,
 		})
 	}
 
