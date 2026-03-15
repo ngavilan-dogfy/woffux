@@ -3,6 +3,7 @@ package woffu
 import (
 	"fmt"
 	"io"
+	"net/url"
 	"strings"
 )
 
@@ -36,7 +37,7 @@ func (e *AuthError) Unwrap() error {
 func Authenticate(client *Client, companyClient *Client, email, password string) (string, error) {
 	// Step 1: Check if email exists
 	var newLogin woffuNewLogin
-	err := client.doJSON("GET", "/svc/accounts/authorization/use-new-login?email="+email, nil, nil, &newLogin)
+	err := client.doJSON("GET", "/svc/accounts/authorization/use-new-login?email="+url.QueryEscape(email), nil, nil, &newLogin)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "400") || strings.Contains(errStr, "UserNotFound") || strings.Contains(errStr, "404") {
@@ -50,7 +51,7 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 
 	// Step 2: Get login configuration
 	var loginConfig woffuLoginConfiguration
-	err = client.doJSON("GET", "/svc/accounts/companies/login-configuration-by-email?email="+email, nil, nil, &loginConfig)
+	err = client.doJSON("GET", "/svc/accounts/companies/login-configuration-by-email?email="+url.QueryEscape(email), nil, nil, &loginConfig)
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "400") || strings.Contains(errStr, "UserNotFound") || strings.Contains(errStr, "404") {
@@ -60,7 +61,7 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 	}
 
 	// Step 3: Get token with credentials
-	formBody := fmt.Sprintf("grant_type=password&username=%s&password=%s", email, password)
+	formBody := fmt.Sprintf("grant_type=password&username=%s&password=%s", url.QueryEscape(email), url.QueryEscape(password))
 	resp, err := client.doRaw(requestOptions{
 		Method:      "POST",
 		Path:        "/svc/accounts/authorization/token",

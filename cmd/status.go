@@ -5,7 +5,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/ngavilan-dogfy/woffuk-cli/internal/config"
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/woffu"
 )
 
@@ -13,14 +12,9 @@ var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show today's signing status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.Load()
+		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
 			return err
-		}
-
-		password, err := config.GetPassword(cfg.WoffuEmail)
-		if err != nil {
-			return fmt.Errorf("cannot get password: %w", err)
 		}
 
 		client := woffu.NewWoffuClient(cfg.WoffuURL)
@@ -28,7 +22,7 @@ var statusCmd = &cobra.Command{
 
 		token, err := woffu.Authenticate(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
-			return fmt.Errorf("auth failed: %w", err)
+			return fmt.Errorf("auth failed: %w\n\n  If your credentials changed, run 'woffuk setup'", err)
 		}
 
 		info, err := woffu.GetSignInfo(companyClient, token, cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)

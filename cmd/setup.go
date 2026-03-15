@@ -39,9 +39,12 @@ var setupCmd = &cobra.Command{
 func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(sTitle.Render("woffuk setup"))
 
+	// Load existing config for pre-filling (if any)
+	existing, _ := config.Load()
+
 	// ── Step 1: Login ──────────────────────────────────────────────
 
-	email, password, company, companyURL, profile, err := loginFlow()
+	email, password, company, companyURL, profile, err := loginFlow(existing)
 	if err != nil {
 		return err
 	}
@@ -538,22 +541,29 @@ func openURL(url string) {
 }
 
 // loginFlow handles the full login with retries and error-specific re-prompts.
-func loginFlow() (email, password, company, companyURL string, profile *woffu.UserProfile, err error) {
+func loginFlow(existing *config.Config) (email, password, company, companyURL string, profile *woffu.UserProfile, err error) {
 	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 
+	// Pre-fill from existing config
+	if existing != nil {
+		email = existing.WoffuEmail
+	}
+
 	// Initial credentials form
+	emailInput := huh.NewInput().
+		Title("Email").
+		Placeholder("you@company.com").
+		Value(&email).
+		Validate(func(s string) error {
+			if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
+				return fmt.Errorf("enter a valid email")
+			}
+			return nil
+		})
+
 	err = huh.NewForm(
 		huh.NewGroup(
-			huh.NewInput().
-				Title("Email").
-				Placeholder("you@company.com").
-				Value(&email).
-				Validate(func(s string) error {
-					if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
-						return fmt.Errorf("enter a valid email")
-					}
-					return nil
-				}),
+			emailInput,
 			huh.NewInput().
 				Title("Password").
 				EchoMode(huh.EchoModePassword).
