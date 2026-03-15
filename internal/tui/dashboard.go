@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/config"
+	"github.com/ngavilan-dogfy/woffuk-cli/internal/notify"
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/woffu"
 )
 
@@ -27,7 +28,7 @@ type dataLoadedMsg struct {
 }
 
 type errMsg struct{ err error }
-type signDoneMsg struct{ eventID string }
+type signDoneMsg struct{}
 
 type Dashboard struct {
 	client        *woffu.Client
@@ -39,7 +40,6 @@ type Dashboard struct {
 	token    string
 	signInfo *woffu.SignInfo
 	events   []woffu.AvailableUserEvent
-	signID   string
 	err      error
 }
 
@@ -64,7 +64,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return d, tea.Quit
 		case "s":
-			if d.state == stateReady && d.signInfo != nil && d.signInfo.ShouldSign {
+			if d.state == stateReady && d.signInfo != nil && d.signInfo.IsWorkingDay {
 				d.state = stateSigning
 				return d, d.doSign()
 			}
@@ -79,7 +79,6 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.state = stateReady
 
 	case signDoneMsg:
-		d.signID = msg.eventID
 		d.state = stateSigned
 
 	case errMsg:
@@ -107,7 +106,7 @@ func (d *Dashboard) View() string {
 		b.WriteString(dimStyle.Render("  Signing..."))
 
 	case stateSigned:
-		b.WriteString(greenStyle.Render(fmt.Sprintf("  Signed! Event ID: %s", d.signID)))
+		b.WriteString(greenStyle.Render("  Signed successfully!"))
 		b.WriteString("\n")
 		b.WriteString(helpStyle.Render("  [r] refresh  [q] quit"))
 
@@ -127,31 +126,22 @@ func (d *Dashboard) View() string {
 func (d *Dashboard) renderStatus() string {
 	info := d.signInfo
 
-	shouldSign := redStyle.Render("no")
-	if info.ShouldSign {
-		shouldSign = greenStyle.Render("yes")
+	workingDay := redStyle.Render("no")
+	if info.IsWorkingDay {
+		workingDay = greenStyle.Render("yes")
 	}
 
-	telework := dimStyle.Render("no")
-	if info.IsTelework {
-		telework = greenStyle.Render("yes (home)")
-	}
+	modeStr := dimStyle.Render(fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
 
 	rows := []string{
 		labelStyle.Render("Date") + valueStyle.Render(info.Date),
-		labelStyle.Render("Should sign") + shouldSign,
-		labelStyle.Render("Telework") + telework,
+		labelStyle.Render("Working day") + workingDay,
+		labelStyle.Render("Mode") + modeStr,
 	}
 
-	if info.ShouldSign {
-		lat, lon := d.cfg.Latitude, d.cfg.Longitude
-		label := "office"
-		if info.IsTelework {
-			lat, lon = d.cfg.HomeLatitude, d.cfg.HomeLongitude
-			label = "home"
-		}
+	if info.IsWorkingDay {
 		rows = append(rows, labelStyle.Render("Coordinates")+
-			dimStyle.Render(fmt.Sprintf("%.4f, %.4f (%s)", lat, lon, label)))
+			dimStyle.Render(fmt.Sprintf("%.4f, %.4f", info.Latitude, info.Longitude)))
 	}
 
 	content := strings.Join(rows, "\n")
@@ -199,7 +189,7 @@ func (d *Dashboard) renderNextEvents() string {
 
 func (d *Dashboard) renderHelp() string {
 	parts := []string{"[r] refresh", "[q] quit"}
-	if d.signInfo != nil && d.signInfo.ShouldSign {
+	if d.signInfo != nil && d.signInfo.IsWorkingDay {
 		parts = append([]string{"[s] sign"}, parts...)
 	}
 	return helpStyle.Render("  " + lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(parts, "  ")))
@@ -213,7 +203,8 @@ func (d *Dashboard) fetchData() tea.Cmd {
 		}
 		d.token = token
 
-		info, err := woffu.GetSignInfo(d.companyClient, token)
+		info, err := woffu.GetSignInfo(d.companyClient, token,
+			d.cfg.Latitude, d.cfg.Longitude, d.cfg.HomeLatitude, d.cfg.HomeLongitude)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -229,16 +220,17 @@ func (d *Dashboard) fetchData() tea.Cmd {
 
 func (d *Dashboard) doSign() tea.Cmd {
 	return func() tea.Msg {
-		lat, lon := d.cfg.Latitude, d.cfg.Longitude
-		if d.signInfo.IsTelework {
-			lat, lon = d.cfg.HomeLatitude, d.cfg.HomeLongitude
-		}
-
-		eventID, err := woffu.DoSign(d.companyClient, d.token, lat, lon)
+		err := woffu.DoSign(d.companyClient, d.token, d.signInfo.Latitude, d.signInfo.Longitude)
 		if err != nil {
 			return errMsg{err}
 		}
 
-		return signDoneMsg{eventID: eventID}
+		telegramCfg := notify.TelegramConfig{
+			BotToken: d.cfg.Telegram.BotToken,
+			ChatID:   d.cfg.Telegram.ChatID,
+		}
+		_ = notify.SendSignedNotification(telegramCfg, d.signInfo)
+
+		return signDoneMsg{}
 	}
 }

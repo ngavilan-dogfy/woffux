@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/config"
+	"github.com/ngavilan-dogfy/woffuk-cli/internal/notify"
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/woffu"
 )
 
@@ -13,7 +14,6 @@ var signCmd = &cobra.Command{
 	Use:   "sign",
 	Short: "Clock in/out on Woffu (works locally and in CI)",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Load config from file or env vars (CI fallback)
 		cfg, password, err := config.LoadOrEnv()
 		if err != nil {
 			return err
@@ -29,30 +29,36 @@ var signCmd = &cobra.Command{
 		}
 
 		fmt.Println("Checking calendar...")
-		info, err := woffu.GetSignInfo(companyClient, token)
+		info, err := woffu.GetSignInfo(companyClient, token, cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)
 		if err != nil {
 			return fmt.Errorf("get sign info: %w", err)
 		}
 
-		if !info.ShouldSign {
-			fmt.Println("No need to sign today.")
+		telegramCfg := notify.TelegramConfig{
+			BotToken: cfg.Telegram.BotToken,
+			ChatID:   cfg.Telegram.ChatID,
+		}
+
+		if !info.IsWorkingDay {
+			fmt.Println("Not a working day — skipping.")
+			_ = notify.SendSkippedNotification(telegramCfg, info.Date, "Not a working day")
 			return nil
 		}
 
-		lat, lon := cfg.Latitude, cfg.Longitude
-		if info.IsTelework {
-			lat, lon = cfg.HomeLatitude, cfg.HomeLongitude
-			fmt.Printf("Telework day — signing with home coordinates (%.4f, %.4f)\n", lat, lon)
-		} else {
-			fmt.Printf("Office day — signing with office coordinates (%.4f, %.4f)\n", lat, lon)
-		}
+		fmt.Printf("%s %s — signing with coordinates (%.4f, %.4f)\n",
+			info.Mode.Emoji(), info.Mode.Label(), info.Latitude, info.Longitude)
 
-		signID, err := woffu.DoSign(companyClient, token, lat, lon)
+		err = woffu.DoSign(companyClient, token, info.Latitude, info.Longitude)
 		if err != nil {
 			return fmt.Errorf("sign failed: %w", err)
 		}
 
-		fmt.Printf("Signed successfully! Event ID: %s\n", signID)
+		fmt.Println("Signed successfully!")
+
+		if err := notify.SendSignedNotification(telegramCfg, info); err != nil {
+			fmt.Printf("Warning: telegram notification failed: %s\n", err)
+		}
+
 		return nil
 	},
 }

@@ -2,6 +2,28 @@ package woffu
 
 import "encoding/json"
 
+// SignMode represents whether the user is working from office or remote.
+type SignMode string
+
+const (
+	SignModeOffice SignMode = "office"
+	SignModeRemote SignMode = "remote"
+)
+
+func (m SignMode) Label() string {
+	if m == SignModeRemote {
+		return "Teletrabajo"
+	}
+	return "Oficina"
+}
+
+func (m SignMode) Emoji() string {
+	if m == SignModeRemote {
+		return "\U0001F3E0" // 🏠
+	}
+	return "\U0001F3E2" // 🏢
+}
+
 // Auth types
 
 type woffuNewLogin struct {
@@ -56,9 +78,9 @@ type WoffuCalendarEvent struct {
 		Name string `json:"Name"`
 	} `json:"Schedule"`
 	Event struct {
-		AbsenceEvents         []json.RawMessage    `json:"AbsenceEvents"`
-		PresenceEvents        []presenceEvent       `json:"PresenceEvents"`
-		PresencePendingEvents []presenceEvent       `json:"PresencePendingEvents"`
+		AbsenceEvents         []json.RawMessage `json:"AbsenceEvents"`
+		PresenceEvents        []presenceEvent   `json:"PresenceEvents"`
+		PresencePendingEvents []presenceEvent   `json:"PresencePendingEvents"`
 	} `json:"Event"`
 }
 
@@ -77,10 +99,6 @@ type woffuSignBody struct {
 	TimezoneOffset   int     `json:"timezoneOffset"`
 }
 
-type woffuSignResponse struct {
-	SignEventID string `json:"signEventId"`
-}
-
 // Domain types
 
 type AvailableUserEvent struct {
@@ -90,10 +108,12 @@ type AvailableUserEvent struct {
 }
 
 type SignInfo struct {
-	Date       string
-	IsTelework bool
-	ShouldSign bool
-	NextEvents []SignEvent
+	Date         string
+	Mode         SignMode
+	Latitude     float64
+	Longitude    float64
+	IsWorkingDay bool
+	NextEvents   []SignEvent
 }
 
 type SignEvent struct {

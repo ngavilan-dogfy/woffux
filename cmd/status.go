@@ -31,14 +31,17 @@ var statusCmd = &cobra.Command{
 			return fmt.Errorf("auth failed: %w", err)
 		}
 
-		info, err := woffu.GetSignInfo(companyClient, token)
+		info, err := woffu.GetSignInfo(companyClient, token, cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)
 		if err != nil {
 			return fmt.Errorf("get sign info: %w", err)
 		}
 
 		fmt.Printf("Date:        %s\n", info.Date)
-		fmt.Printf("Should sign: %s\n", boolToYesNo(info.ShouldSign))
-		fmt.Printf("Telework:    %s\n", boolToYesNo(info.IsTelework))
+		fmt.Printf("Working day: %s\n", boolToYesNo(info.IsWorkingDay))
+		fmt.Printf("Mode:        %s %s\n", info.Mode.Emoji(), info.Mode.Label())
+		if info.IsWorkingDay {
+			fmt.Printf("Coordinates: %.4f, %.4f\n", info.Latitude, info.Longitude)
+		}
 
 		if len(info.NextEvents) > 0 {
 			fmt.Println("\nNext events:")

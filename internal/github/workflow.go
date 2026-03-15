@@ -127,6 +127,8 @@ jobs:
           WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
           WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
           WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 `, strings.Join(cronLines, "\n"))
 }
 
@@ -165,6 +167,8 @@ jobs:
           WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
           WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
           WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 `
 }
 

@@ -67,6 +67,12 @@ func setSecrets(repo string, cfg *config.Config, password string) error {
 		"WOFFU_HOME_LONGITUDE": fmt.Sprintf("%f", cfg.HomeLongitude),
 	}
 
+	// Add Telegram secrets if configured
+	if cfg.Telegram.BotToken != "" {
+		secrets["TELEGRAM_BOT_TOKEN"] = cfg.Telegram.BotToken
+		secrets["TELEGRAM_CHAT_ID"] = cfg.Telegram.ChatID
+	}
+
 	for name, value := range secrets {
 		if err := ghSetSecret(repo, name, value); err != nil {
 			return fmt.Errorf("set secret %s: %w", name, err)

@@ -98,6 +98,23 @@ var setupCmd = &cobra.Command{
 			schedule.Friday = promptDay(reader, "Friday", schedule.Friday)
 		}
 
+		// Telegram notifications (optional)
+		fmt.Println()
+		fmt.Println("=== Telegram notifications (optional) ===")
+		fmt.Println()
+		telegramToken := prompt(reader, "Telegram Bot Token (or Enter to skip)")
+		var telegramCfg config.TelegramConfig
+		if telegramToken != "" {
+			telegramChatID := prompt(reader, "Telegram Chat ID")
+			telegramCfg = config.TelegramConfig{
+				BotToken: telegramToken,
+				ChatID:   telegramChatID,
+			}
+			fmt.Println("  Telegram notifications enabled")
+		} else {
+			fmt.Println("  Skipped — you can configure later in ~/.woffuk.yaml")
+		}
+
 		// Save config
 		cfg := &config.Config{
 			WoffuURL:        "https://app.woffu.com/api",
@@ -109,6 +126,7 @@ var setupCmd = &cobra.Command{
 			HomeLongitude:   homeResult.Lon,
 			Timezone:        tz,
 			Schedule:        schedule,
+			Telegram:        telegramCfg,
 		}
 
 		if err := config.Save(cfg); err != nil {

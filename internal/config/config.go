@@ -26,6 +26,11 @@ type Schedule struct {
 	Friday    DaySchedule `yaml:"friday"`
 }
 
+type TelegramConfig struct {
+	BotToken string `yaml:"bot_token,omitempty"`
+	ChatID   string `yaml:"chat_id,omitempty"`
+}
+
 type Config struct {
 	WoffuURL        string  `yaml:"woffu_url"`
 	WoffuCompanyURL string  `yaml:"woffu_company_url"`
@@ -36,7 +41,8 @@ type Config struct {
 	HomeLongitude   float64 `yaml:"home_longitude"`
 	GithubFork      string  `yaml:"github_fork,omitempty"`
 	Timezone        string  `yaml:"timezone"`
-	Schedule        Schedule `yaml:"schedule"`
+	Schedule        Schedule       `yaml:"schedule"`
+	Telegram        TelegramConfig `yaml:"telegram,omitempty"`
 }
 
 // DefaultSchedule returns the default signing schedule.
@@ -114,6 +120,10 @@ func LoadOrEnv() (*Config, string, error) {
 		Longitude:       lon,
 		HomeLatitude:    homeLat,
 		HomeLongitude:   homeLon,
+		Telegram: TelegramConfig{
+			BotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+			ChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
+		},
 	}, password, nil
 }
 
