@@ -23,11 +23,13 @@ jobs:
 
       - name: Build binaries
         run: |
+          VERSION="${GITHUB_REF_NAME}"
+          LDFLAGS="-s -w -X github.com/ngavilan-dogfy/woffuk-cli/cmd.Version=${VERSION}"
           mkdir -p dist
-          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk-darwin-arm64 ./cmd/woffuk
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk-darwin-amd64 ./cmd/woffuk
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk-linux-amd64  ./cmd/woffuk
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk-linux-arm64  ./cmd/woffuk
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffuk-darwin-arm64 ./cmd/woffuk
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffuk-darwin-amd64 ./cmd/woffuk
+          GOOS=linux   GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffuk-linux-amd64  ./cmd/woffuk
+          GOOS=linux   GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffuk-linux-arm64  ./cmd/woffuk
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

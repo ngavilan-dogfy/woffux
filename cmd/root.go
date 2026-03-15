@@ -14,9 +14,10 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "woffuk",
-	Short: "Woffu time tracking CLI",
-	Long:  "CLI tool to automatically clock in/out of Woffu with an interactive TUI dashboard.",
+	Use:     "woffuk",
+	Short:   "Woffu time tracking CLI",
+	Long:    "CLI tool to automatically clock in/out of Woffu with an interactive TUI dashboard.",
+	Version: Version,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
@@ -50,6 +51,7 @@ func init() {
 	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(autoCmd)
+	rootCmd.AddCommand(updateCmd)
 }
 
 // loadConfigOrSetup loads config + password, or guides user to setup.
