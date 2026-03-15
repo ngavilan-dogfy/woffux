@@ -1,252 +1,368 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/huh/spinner"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/config"
 	"github.com/ngavilan-dogfy/woffuk-cli/internal/geocode"
 	gh "github.com/ngavilan-dogfy/woffuk-cli/internal/github"
 )
 
+var (
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).MarginBottom(1)
+	successIcon = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).SetString("✓")
+	infoIcon    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).SetString("→")
+	coordStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+)
+
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Interactive setup wizard",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		reader := bufio.NewReader(os.Stdin)
-
-		fmt.Println("=== woffuk setup ===")
-		fmt.Println()
-
-		// --- Woffu credentials ---
-
-		email := prompt(reader, "Woffu email")
-
-		fmt.Print("Woffu password: ")
-		passBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-		if err != nil {
-			return fmt.Errorf("read password: %w", err)
-		}
-		password := string(passBytes)
-		fmt.Println()
-
-		company := prompt(reader, "Company name (e.g. dogfydiet)")
-		companyURL := "https://" + company + ".woffu.com"
-		fmt.Printf("  -> %s\n", companyURL)
-
-		// --- Locations ---
-
-		fmt.Println()
-		fmt.Println("=== Office location ===")
-		fmt.Println()
-		officeLat, officeLon, err := promptLocation(reader, "Where is your office?")
-		if err != nil {
-			return err
-		}
-
-		// Nominatim rate limit
-		time.Sleep(time.Second)
-
-		fmt.Println()
-		fmt.Println("=== Home location ===")
-		fmt.Println()
-		homeLat, homeLon, err := promptLocation(reader, "Where is your home?")
-		if err != nil {
-			return err
-		}
-
-		// --- Schedule ---
-
-		fmt.Println()
-		fmt.Println("=== Auto-sign schedule ===")
-		fmt.Println()
-
-		zone, _ := time.Now().Zone()
-		tz := prompt(reader, fmt.Sprintf("Timezone [%s]", zone))
-		if tz == "" {
-			tz = zone
-		}
-
-		fmt.Println()
-		fmt.Println("Default schedule:")
-		fmt.Println("  Mon-Thu: 08:30, 13:30, 14:15, 17:30")
-		fmt.Println("  Fri:     08:00, 15:00")
-		fmt.Println()
-
-		useDefault := prompt(reader, "Use default schedule? [Y/n]")
-		schedule := config.DefaultSchedule()
-
-		if strings.ToLower(useDefault) == "n" {
-			fmt.Println()
-			fmt.Println("Enter times as HH:MM separated by commas, or 'off' to disable a day.")
-			fmt.Println()
-			schedule.Monday = promptDay(reader, "Monday", schedule.Monday)
-			schedule.Tuesday = promptDay(reader, "Tuesday", schedule.Tuesday)
-			schedule.Wednesday = promptDay(reader, "Wednesday", schedule.Wednesday)
-			schedule.Thursday = promptDay(reader, "Thursday", schedule.Thursday)
-			schedule.Friday = promptDay(reader, "Friday", schedule.Friday)
-		}
-
-		// --- Telegram (optional) ---
-
-		fmt.Println()
-		fmt.Println("=== Telegram notifications (optional) ===")
-		fmt.Println()
-		telegramToken := prompt(reader, "Telegram Bot Token (Enter to skip)")
-		var telegramCfg config.TelegramConfig
-		if telegramToken != "" {
-			telegramChatID := prompt(reader, "Telegram Chat ID")
-			telegramCfg = config.TelegramConfig{
-				BotToken: telegramToken,
-				ChatID:   telegramChatID,
-			}
-			fmt.Println("  Telegram notifications enabled")
-		} else {
-			fmt.Println("  Skipped")
-		}
-
-		// --- Save ---
-
-		cfg := &config.Config{
-			WoffuURL:        "https://app.woffu.com/api",
-			WoffuCompanyURL: companyURL,
-			WoffuEmail:      email,
-			Latitude:        officeLat,
-			Longitude:       officeLon,
-			HomeLatitude:    homeLat,
-			HomeLongitude:   homeLon,
-			Timezone:        tz,
-			Schedule:        schedule,
-			Telegram:        telegramCfg,
-		}
-
-		if err := config.Save(cfg); err != nil {
-			return fmt.Errorf("save config: %w", err)
-		}
-		fmt.Println("\nConfig saved to ~/.woffuk.yaml")
-
-		if err := config.SetPassword(email, password); err != nil {
-			return fmt.Errorf("save password to keychain: %w", err)
-		}
-		fmt.Println("Password saved to OS keychain")
-
-		// --- GitHub ---
-
-		fmt.Println()
-		forkAnswer := prompt(reader, "Fork repo and configure GitHub Actions? [Y/n]")
-		if forkAnswer == "" || strings.ToLower(forkAnswer) == "y" {
-			fmt.Println("  Forking repo...")
-			forkName, err := gh.ForkAndSetup(cfg, password)
-			if err != nil {
-				return fmt.Errorf("github setup: %w", err)
-			}
-			cfg.GithubFork = forkName
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("save config with fork: %w", err)
-			}
-			fmt.Printf("  Fork: %s\n", forkName)
-			fmt.Println("  Secrets configured")
-			fmt.Println("  Workflows generated and pushed")
-			fmt.Println("  GitHub Actions enabled")
-		}
-
-		fmt.Println()
-		fmt.Println("Setup complete! Auto-signing is active.")
-		printSetupSchedule(schedule)
-		fmt.Println()
-		fmt.Println("Run 'woffuk' to open the dashboard.")
-
-		return nil
-	},
+	RunE:  runSetup,
 }
 
-// promptLocation handles the interactive location search with multiple results.
-func promptLocation(reader *bufio.Reader, question string) (float64, float64, error) {
-	for {
-		query := prompt(reader, question)
-		if query == "" {
-			continue
+func runSetup(cmd *cobra.Command, args []string) error {
+	fmt.Println(titleStyle.Render("woffuk setup"))
+
+	// --- Credentials ---
+
+	var email, password, company string
+
+	credentialsForm := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Woffu email").
+				Placeholder("you@company.com").
+				Value(&email).
+				Validate(func(s string) error {
+					if !strings.Contains(s, "@") {
+						return fmt.Errorf("enter a valid email")
+					}
+					return nil
+				}),
+
+			huh.NewInput().
+				Title("Woffu password").
+				EchoMode(huh.EchoModePassword).
+				Value(&password).
+				Validate(func(s string) error {
+					if len(s) < 1 {
+						return fmt.Errorf("password cannot be empty")
+					}
+					return nil
+				}),
+
+			huh.NewInput().
+				Title("Company name").
+				Description("Your Woffu subdomain (e.g. dogfydiet)").
+				Placeholder("yourcompany").
+				Value(&company).
+				Validate(func(s string) error {
+					if len(s) < 1 {
+						return fmt.Errorf("company name cannot be empty")
+					}
+					return nil
+				}),
+		).Title("Woffu credentials"),
+	)
+
+	if err := credentialsForm.Run(); err != nil {
+		return err
+	}
+
+	companyURL := "https://" + company + ".woffu.com"
+	fmt.Printf("  %s %s\n\n", infoIcon, companyURL)
+
+	// --- Office location ---
+
+	officeLat, officeLon, err := locationPicker("Office location")
+	if err != nil {
+		return err
+	}
+
+	time.Sleep(time.Second) // Nominatim rate limit
+
+	// --- Home location ---
+
+	homeLat, homeLon, err := locationPicker("Home location")
+	if err != nil {
+		return err
+	}
+
+	// --- Schedule ---
+
+	var useDefaultSchedule bool
+
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Use default schedule?").
+				Description("Mon-Thu: 08:30, 13:30, 14:15, 17:30 | Fri: 08:00, 15:00").
+				Affirmative("Yes").
+				Negative("Customize").
+				Value(&useDefaultSchedule),
+		).Title("Auto-sign schedule"),
+	).Run()
+
+	schedule := config.DefaultSchedule()
+	zone, _ := time.Now().Zone()
+	tz := zone
+
+	if !useDefaultSchedule {
+		schedule, tz, err = customScheduleForm(zone)
+		if err != nil {
+			return err
+		}
+	}
+
+	// --- Telegram ---
+
+	var wantTelegram bool
+	var telegramToken, telegramChatID string
+
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Enable Telegram notifications?").
+				Description("Get a message every time you clock in/out").
+				Affirmative("Yes").
+				Negative("Skip").
+				Value(&wantTelegram),
+		).Title("Notifications"),
+	).Run()
+
+	var telegramCfg config.TelegramConfig
+	if wantTelegram {
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Bot Token").
+					Description("Create one at @BotFather on Telegram").
+					Placeholder("123456:ABC-DEF...").
+					Value(&telegramToken),
+				huh.NewInput().
+					Title("Chat ID").
+					Description("Get yours at @userinfobot on Telegram").
+					Placeholder("987654321").
+					Value(&telegramChatID),
+			).Title("Telegram"),
+		).Run()
+
+		telegramCfg = config.TelegramConfig{
+			BotToken: telegramToken,
+			ChatID:   telegramChatID,
+		}
+		fmt.Printf("  %s Telegram notifications enabled\n\n", successIcon)
+	}
+
+	// --- Save ---
+
+	cfg := &config.Config{
+		WoffuURL:        "https://app.woffu.com/api",
+		WoffuCompanyURL: companyURL,
+		WoffuEmail:      email,
+		Latitude:        officeLat,
+		Longitude:       officeLon,
+		HomeLatitude:    homeLat,
+		HomeLongitude:   homeLon,
+		Timezone:        tz,
+		Schedule:        schedule,
+		Telegram:        telegramCfg,
+	}
+
+	err = spinner.New().
+		Title("Saving config...").
+		Action(func() {
+			config.Save(cfg)
+			config.SetPassword(email, password)
+		}).
+		Run()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("  %s Config saved to ~/.woffuk.yaml\n", successIcon)
+	fmt.Printf("  %s Password saved to OS keychain\n\n", successIcon)
+
+	// --- GitHub ---
+
+	var wantGitHub bool
+
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Set up GitHub Actions for auto-signing?").
+				Description("Forks this repo, sets secrets, enables workflows").
+				Affirmative("Yes").
+				Negative("Skip").
+				Value(&wantGitHub),
+		).Title("GitHub Actions"),
+	).Run()
+
+	if wantGitHub {
+		var forkName string
+		err = spinner.New().
+			Title("Setting up GitHub...").
+			Action(func() {
+				forkName, err = gh.ForkAndSetup(cfg, password)
+			}).
+			Run()
+		if err != nil {
+			return fmt.Errorf("github setup: %w", err)
 		}
 
-		fmt.Println("  Searching...")
-		results, err := geocode.Search(query, 5)
+		cfg.GithubFork = forkName
+		config.Save(cfg)
+
+		fmt.Printf("  %s Fork: %s\n", successIcon, forkName)
+		fmt.Printf("  %s Secrets configured\n", successIcon)
+		fmt.Printf("  %s GitHub Actions enabled\n", successIcon)
+	}
+
+	// --- Done ---
+
+	fmt.Println()
+	fmt.Println(titleStyle.Render("Setup complete!"))
+	printSetupSchedule(schedule)
+	fmt.Println()
+	fmt.Printf("  Run %s to open the dashboard.\n\n", lipgloss.NewStyle().Bold(true).Render("woffuk"))
+
+	return nil
+}
+
+func locationPicker(title string) (float64, float64, error) {
+	for {
+		var query string
+
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Search for a place").
+					Description("Street, building, city...").
+					Placeholder("Passeig Zona Franca 28 Barcelona").
+					Value(&query).
+					Validate(func(s string) error {
+						if len(s) < 3 {
+							return fmt.Errorf("enter at least 3 characters")
+						}
+						return nil
+					}),
+			).Title(title),
+		).Run()
+
+		var results []geocode.Result
+		var searchErr error
+
+		err := spinner.New().
+			Title("Searching...").
+			Action(func() {
+				results, searchErr = geocode.Search(query, 5)
+			}).
+			Run()
 		if err != nil {
-			fmt.Printf("  Error: %s\n", err)
-			fmt.Println("  Try again with a different query.")
+			return 0, 0, err
+		}
+
+		if searchErr != nil {
+			fmt.Printf("  Error: %s. Try again.\n\n", searchErr)
 			continue
 		}
 
 		if len(results) == 0 {
-			fmt.Println("  No results found. Try adding more details (city, country).")
+			fmt.Println("  No results. Try adding more details (city, country).")
+			fmt.Println()
 			continue
 		}
 
-		if len(results) == 1 {
-			r := results[0]
-			fmt.Printf("  Found: %s\n", r.DisplayName)
-			fmt.Printf("  Coordinates: %.6f, %.6f\n", r.Lat, r.Lon)
-			confirm := prompt(reader, "  Is this correct? [Y/n]")
-			if confirm == "" || strings.ToLower(confirm) == "y" {
-				return r.Lat, r.Lon, nil
-			}
-			fmt.Println("  Try again with a different query.")
-			continue
-		}
-
-		// Multiple results — let the user pick
-		fmt.Println()
+		// Build options for the select
+		options := make([]huh.Option[int], 0, len(results)+1)
 		for i, r := range results {
-			fmt.Printf("  %d) %s\n", i+1, r.DisplayName)
+			options = append(options, huh.NewOption(
+				fmt.Sprintf("%s  %s", r.DisplayName, coordStyle.Render(fmt.Sprintf("(%.4f, %.4f)", r.Lat, r.Lon))),
+				i,
+			))
 		}
-		fmt.Println("  0) None of these — search again")
-		fmt.Println()
+		options = append(options, huh.NewOption("None of these — search again", -1))
 
-		choice := prompt(reader, "  Pick a number")
-		n, err := strconv.Atoi(strings.TrimSpace(choice))
-		if err != nil || n < 0 || n > len(results) {
-			fmt.Println("  Invalid choice. Try again.")
+		var choice int
+
+		huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[int]().
+					Title("Pick a location").
+					Options(options...).
+					Value(&choice),
+			),
+		).Run()
+
+		if choice == -1 {
 			continue
 		}
 
-		if n == 0 {
-			continue
-		}
-
-		r := results[n-1]
-		fmt.Printf("  Selected: %s\n", r.DisplayName)
-		fmt.Printf("  Coordinates: %.6f, %.6f\n", r.Lat, r.Lon)
+		r := results[choice]
+		fmt.Printf("  %s %s\n", successIcon, r.DisplayName)
+		fmt.Printf("  %s %.6f, %.6f\n\n", infoIcon, r.Lat, r.Lon)
 		return r.Lat, r.Lon, nil
 	}
 }
 
-func prompt(reader *bufio.Reader, label string) string {
-	fmt.Printf("%s: ", label)
-	input, _ := reader.ReadString('\n')
-	return strings.TrimSpace(input)
+func customScheduleForm(defaultTz string) (config.Schedule, string, error) {
+	var monTimes, tueTimes, wedTimes, thuTimes, friTimes, tz string
+
+	tz = defaultTz
+
+	huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Timezone").
+				Value(&tz),
+			huh.NewInput().
+				Title("Monday").
+				Description("HH:MM separated by commas, or 'off'").
+				Placeholder("08:30, 13:30, 14:15, 17:30").
+				Value(&monTimes),
+			huh.NewInput().
+				Title("Tuesday").
+				Placeholder("08:30, 13:30, 14:15, 17:30").
+				Value(&tueTimes),
+			huh.NewInput().
+				Title("Wednesday").
+				Placeholder("08:30, 13:30, 14:15, 17:30").
+				Value(&wedTimes),
+			huh.NewInput().
+				Title("Thursday").
+				Placeholder("08:30, 13:30, 14:15, 17:30").
+				Value(&thuTimes),
+			huh.NewInput().
+				Title("Friday").
+				Placeholder("08:00, 15:00").
+				Value(&friTimes),
+		).Title("Custom schedule"),
+	).Run()
+
+	return config.Schedule{
+		Monday:    parseDayInput(monTimes),
+		Tuesday:   parseDayInput(tueTimes),
+		Wednesday: parseDayInput(wedTimes),
+		Thursday:  parseDayInput(thuTimes),
+		Friday:    parseDayInput(friTimes),
+	}, tz, nil
 }
 
-func promptDay(reader *bufio.Reader, name string, current config.DaySchedule) config.DaySchedule {
-	var currentTimes []string
-	for _, t := range current.Times {
-		currentTimes = append(currentTimes, t.Time)
-	}
-	defaultStr := strings.Join(currentTimes, ", ")
-
-	fmt.Printf("  %s [%s]: ", name, defaultStr)
-	input, _ := reader.ReadString('\n')
+func parseDayInput(input string) config.DaySchedule {
 	input = strings.TrimSpace(input)
-
 	if input == "" {
-		return current
+		return config.DaySchedule{Enabled: true, Times: []config.ScheduleEntry{
+			{Time: "08:30"}, {Time: "13:30"}, {Time: "14:15"}, {Time: "17:30"},
+		}}
 	}
-
 	if strings.ToLower(input) == "off" {
 		return config.DaySchedule{Enabled: false}
 	}
@@ -259,7 +375,6 @@ func promptDay(reader *bufio.Reader, name string, current config.DaySchedule) co
 			times = append(times, config.ScheduleEntry{Time: t})
 		}
 	}
-
 	return config.DaySchedule{Enabled: true, Times: times}
 }
 
@@ -268,13 +383,9 @@ func printSetupSchedule(s config.Schedule) {
 		name string
 		day  config.DaySchedule
 	}{
-		{"Mon", s.Monday},
-		{"Tue", s.Tuesday},
-		{"Wed", s.Wednesday},
-		{"Thu", s.Thursday},
-		{"Fri", s.Friday},
+		{"Mon", s.Monday}, {"Tue", s.Tuesday}, {"Wed", s.Wednesday},
+		{"Thu", s.Thursday}, {"Fri", s.Friday},
 	}
-
 	for _, d := range days {
 		if !d.day.Enabled {
 			fmt.Printf("  %s: off\n", d.name)
