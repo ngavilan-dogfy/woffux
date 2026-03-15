@@ -138,12 +138,14 @@ func (c *Client) doRaw(opts requestOptions) (*http.Response, error) {
 		req.Header.Set("Content-Type", opts.ContentType)
 	}
 
-	// Don't follow redirects automatically
-	c.httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		return http.ErrUseLastResponse
+	// Use a separate client that doesn't follow redirects
+	noRedirectClient := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := noRedirectClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request %s %s: %w", opts.Method, url, err)
 	}

@@ -32,6 +32,8 @@ var (
 	sBold    = lipgloss.NewStyle().Bold(true)
 )
 
+var errNoSelection = fmt.Errorf("no selection")
+
 var setupCmd = &cobra.Command{
 	Use:   "setup",
 	Short: "Interactive setup wizard",
@@ -137,16 +139,25 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Telegram:        telegramCfg,
 	}
 
+	var saveErr, keyErr error
 	spinner.New().
 		Title("Saving...").
 		Action(func() {
-			config.Save(cfg)
-			config.SetPassword(email, password)
+			saveErr = config.Save(cfg)
+			keyErr = config.SetPassword(email, password)
 		}).
 		Run()
 
-	fmt.Printf("  %s Config saved\n", sOk)
-	fmt.Printf("  %s Password in keychain\n\n", sOk)
+	if saveErr != nil {
+		return fmt.Errorf("could not save config: %w", saveErr)
+	}
+	if keyErr != nil {
+		fmt.Printf("  %s Could not save password to keychain: %s\n", sWarn, keyErr)
+		fmt.Printf("     You may need to enter it again next time.\n\n")
+	} else {
+		fmt.Printf("  %s Config saved\n", sOk)
+		fmt.Printf("  %s Password in keychain\n\n", sOk)
+	}
 
 	// ── Step 8: GitHub ─────────────────────────────────────────────
 
@@ -216,7 +227,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 			fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.4f, %.4f", r.Lat, r.Lon)))
 			return r.Lat, r.Lon, nil
 		}
-		return 0, 0, fmt.Errorf("no selection")
+		return 0, 0, errNoSelection
 	}
 
 	options := make([]huh.Option[int], 0, len(results)+1)
@@ -239,7 +250,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 	).Run()
 
 	if choice == -1 {
-		return 0, 0, fmt.Errorf("no selection")
+		return 0, 0, errNoSelection
 	}
 
 	r := results[choice]
@@ -250,7 +261,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float64, float64, error) {
 	for {
 		var method string
-		huh.NewForm(
+		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title(title).
@@ -261,12 +272,18 @@ func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float6
 					Value(&method),
 			),
 		).Run()
+		if err != nil {
+			return 0, 0, err
+		}
 
 		switch method {
 		case "gmaps":
 			lat, lon, err := googleMapsURLPicker(title)
 			if err == nil {
 				return lat, lon, nil
+			}
+			if !errors.Is(err, errNoSelection) {
+				// Real error (not just "try again"), but don't crash — loop back
 			}
 
 		case "manual":
@@ -567,28 +584,6 @@ func printDayVisual(name string, day config.DaySchedule, sIn, sOut lipgloss.Styl
 		}
 	}
 	fmt.Println()
-}
-
-func parseDayInput(input string) config.DaySchedule {
-	input = strings.TrimSpace(input)
-	if input == "" {
-		return config.DaySchedule{Enabled: true, Times: []config.ScheduleEntry{
-			{Time: "08:30"}, {Time: "13:30"}, {Time: "14:15"}, {Time: "17:30"},
-		}}
-	}
-	if strings.ToLower(input) == "off" {
-		return config.DaySchedule{Enabled: false}
-	}
-
-	parts := strings.Split(input, ",")
-	var times []config.ScheduleEntry
-	for _, p := range parts {
-		t := strings.TrimSpace(p)
-		if t != "" {
-			times = append(times, config.ScheduleEntry{Time: t})
-		}
-	}
-	return config.DaySchedule{Enabled: true, Times: times}
 }
 
 // checkGhInstalled verifies gh CLI is available and authenticated.

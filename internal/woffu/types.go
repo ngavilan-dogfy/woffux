@@ -45,15 +45,6 @@ type woffuGetToken struct {
 
 // User types
 
-type woffuUser struct {
-	UserID            int    `json:"UserId"`
-	CompanyID         int    `json:"CompanyId"`
-	ResponsibleUserID int    `json:"ResponsibleUserId"`
-	SecretKey         string `json:"SecretKey"`
-	CalendarID        int    `json:"CalendarId"`
-	ScheduleID        int    `json:"ScheduleId"`
-}
-
 type woffuAgreementEventAvailability struct {
 	AgreementEventID int    `json:"AgreementEventId"`
 	Name             string `json:"Name"`

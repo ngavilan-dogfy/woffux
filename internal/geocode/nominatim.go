@@ -72,18 +72,6 @@ func Search(query string, limit int) ([]Result, error) {
 	return results, nil
 }
 
-// Geocode returns the first result for backward compatibility.
-func Geocode(address string) (*Result, error) {
-	results, err := Search(address, 1)
-	if err != nil {
-		return nil, err
-	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("no results found for: %s", address)
-	}
-	return &results[0], nil
-}
-
 // shortenDisplayName trims overly long Nominatim display names.
 func shortenDisplayName(name string) string {
 	parts := strings.Split(name, ", ")

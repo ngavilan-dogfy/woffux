@@ -135,8 +135,10 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 }
 
 func enableActions(repo string) {
-	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`echo '{"enabled": true, "allowed_actions": "all"}' | gh api -X PUT repos/%s/actions/permissions --input -`, repo))
+	cmd := exec.Command("gh", "api", "-X", "PUT",
+		"repos/"+repo+"/actions/permissions",
+		"--input", "-")
+	cmd.Stdin = strings.NewReader(`{"enabled": true, "allowed_actions": "all"}`)
 	cmd.Run()
 }
 
