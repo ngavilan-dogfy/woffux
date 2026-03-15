@@ -68,47 +68,50 @@ var updateCmd = &cobra.Command{
 			return nil
 		}
 
-		// Download and replace
+		// Download
 		binary := fmt.Sprintf("woffuk-%s-%s", runtime.GOOS, goArch())
 		url := fmt.Sprintf("https://github.com/ngavilan-dogfy/woffuk-cli/releases/download/%s/%s", latestTag, binary)
 
-		// Find current binary path
+		var downloadErr error
+		spinner.New().
+			Title(fmt.Sprintf("Downloading %s...", latestTag)).
+			Action(func() {
+				dl := exec.Command("curl", "-fsSL", url, "-o", "/tmp/woffuk-update")
+				if out, err := dl.CombinedOutput(); err != nil {
+					downloadErr = fmt.Errorf("download failed: %s", string(out))
+					return
+				}
+				exec.Command("chmod", "+x", "/tmp/woffuk-update").Run()
+			}).
+			Run()
+
+		if downloadErr != nil {
+			fmt.Printf("  %s %s\n\n",
+				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), downloadErr)
+			return nil
+		}
+
+		// Install — needs to happen outside spinner so sudo can prompt
 		currentPath, err := os.Executable()
 		if err != nil {
 			currentPath = "/usr/local/bin/woffuk"
 		}
 
-		var updateErr error
-		spinner.New().
-			Title(fmt.Sprintf("Downloading %s...", latestTag)).
-			Action(func() {
-				// Download to temp
-				dl := exec.Command("curl", "-fsSL", url, "-o", "/tmp/woffuk-update")
-				if out, err := dl.CombinedOutput(); err != nil {
-					updateErr = fmt.Errorf("download failed: %s", string(out))
-					return
-				}
-
-				// Make executable
-				exec.Command("chmod", "+x", "/tmp/woffuk-update").Run()
-
-				// Replace binary (may need sudo)
-				mv := exec.Command("mv", "/tmp/woffuk-update", currentPath)
-				if err := mv.Run(); err != nil {
-					// Try with sudo
-					mv = exec.Command("sudo", "mv", "/tmp/woffuk-update", currentPath)
-					mv.Stdin = os.Stdin
-					mv.Stdout = os.Stdout
-					mv.Stderr = os.Stderr
-					updateErr = mv.Run()
-				}
-			}).
-			Run()
-
-		if updateErr != nil {
-			fmt.Printf("  %s Update failed: %s\n\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), updateErr)
-			return nil
+		// Try without sudo first
+		mv := exec.Command("mv", "/tmp/woffuk-update", currentPath)
+		if err := mv.Run(); err != nil {
+			// Needs sudo — tell the user and run with TTY
+			fmt.Printf("  %s Installing to %s (requires sudo)\n", sInfo, currentPath)
+			sudoMv := exec.Command("sudo", "mv", "/tmp/woffuk-update", currentPath)
+			sudoMv.Stdin = os.Stdin
+			sudoMv.Stdout = os.Stdout
+			sudoMv.Stderr = os.Stderr
+			if err := sudoMv.Run(); err != nil {
+				fmt.Printf("\n  %s Install failed. Try manually:\n",
+					lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"))
+				fmt.Printf("    sudo mv /tmp/woffuk-update %s\n\n", currentPath)
+				return nil
+			}
 		}
 
 		fmt.Printf("\n  %s Updated to %s\n\n", sOk, sBold.Render(latestTag))
