@@ -1197,8 +1197,8 @@ func (d *Dashboard) renderCalActionOverlay() string {
 		rows = append(rows, cursor+style.Render(a.name))
 	}
 
-	dates := d.cal.selectedDates()
-	title := fmt.Sprintf("  Action for %d selected days", len(dates))
+	infos := d.cal.selectedDayInfos()
+	title := fmt.Sprintf("  Action for %d days this month", len(infos))
 
 	menuContent := sSection.Render(title) + "\n\n" + strings.Join(rows, "\n") + "\n\n" +
 		sDimmed.Render("  ↑↓ navigate  enter submit  esc cancel")

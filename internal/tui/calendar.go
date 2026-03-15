@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,15 +11,15 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
-const cellWidth = 6 // wider cells to fit badge
+const cellWidth = 5
 
-// calendarGrid renders a visual monthly calendar with colored days and badges.
+// calendarGrid renders a visual monthly calendar with colored days.
 type calendarGrid struct {
 	year     int
 	month    time.Month
 	days     []woffu.CalendarDay
-	cursor   int // day of month (1-31), 0 = none
-	selected map[int]bool
+	cursor   int            // day of month (1-31), 0 = none
+	selected map[string]bool // keyed by "YYYY-MM-DD" — persists across months
 	width    int
 }
 
@@ -38,8 +39,12 @@ func newCalendarGrid(year int, month time.Month, days []woffu.CalendarDay) *cale
 		month:    month,
 		days:     days,
 		cursor:   cursor,
-		selected: make(map[int]bool),
+		selected: make(map[string]bool),
 	}
+}
+
+func (c *calendarGrid) dateStr(day int) string {
+	return fmt.Sprintf("%d-%02d-%02d", c.year, c.month, day)
 }
 
 func (c *calendarGrid) daysInMonth() int {
@@ -47,7 +52,6 @@ func (c *calendarGrid) daysInMonth() int {
 }
 
 func (c *calendarGrid) firstWeekday() int {
-	// Monday = 0, Sunday = 6
 	wd := time.Date(c.year, c.month, 1, 0, 0, 0, 0, time.UTC).Weekday()
 	if wd == time.Sunday {
 		return 6
@@ -56,7 +60,7 @@ func (c *calendarGrid) firstWeekday() int {
 }
 
 func (c *calendarGrid) dayInfo(day int) *woffu.CalendarDay {
-	date := fmt.Sprintf("%d-%02d-%02d", c.year, c.month, day)
+	date := c.dateStr(day)
 	for i := range c.days {
 		if c.days[i].Date == date {
 			return &c.days[i]
@@ -66,38 +70,49 @@ func (c *calendarGrid) dayInfo(day int) *woffu.CalendarDay {
 }
 
 func (c *calendarGrid) toggleSelect(day int) {
-	if c.selected[day] {
-		delete(c.selected, day)
+	ds := c.dateStr(day)
+	if c.selected[ds] {
+		delete(c.selected, ds)
 	} else {
-		c.selected[day] = true
+		c.selected[ds] = true
 	}
 }
 
 func (c *calendarGrid) clearSelection() {
-	c.selected = make(map[int]bool)
+	c.selected = make(map[string]bool)
 }
 
 func (c *calendarGrid) selectedDates() []string {
-	var dates []string
-	for d := 1; d <= c.daysInMonth(); d++ {
-		if c.selected[d] {
-			dates = append(dates, fmt.Sprintf("%d-%02d-%02d", c.year, c.month, d))
-		}
+	dates := make([]string, 0, len(c.selected))
+	for d := range c.selected {
+		dates = append(dates, d)
 	}
+	sort.Strings(dates)
 	return dates
 }
 
-// selectedDayInfos returns the CalendarDay for each selected day.
+// selectedDayInfos returns CalendarDay for selected days in the current month.
 func (c *calendarGrid) selectedDayInfos() []*woffu.CalendarDay {
 	var infos []*woffu.CalendarDay
 	for d := 1; d <= c.daysInMonth(); d++ {
-		if c.selected[d] {
+		if c.selected[c.dateStr(d)] {
 			if info := c.dayInfo(d); info != nil {
 				infos = append(infos, info)
 			}
 		}
 	}
 	return infos
+}
+
+// currentMonthSelectedCount returns how many selected days are in the displayed month.
+func (c *calendarGrid) currentMonthSelectedCount() int {
+	count := 0
+	for d := 1; d <= c.daysInMonth(); d++ {
+		if c.selected[c.dateStr(d)] {
+			count++
+		}
+	}
+	return count
 }
 
 func (c *calendarGrid) monthStats() (working, telework, holidays, weekends, absences int) {
@@ -118,6 +133,8 @@ func (c *calendarGrid) monthStats() (working, telework, holidays, weekends, abse
 	}
 	return
 }
+
+// ── Navigation ──
 
 func (c *calendarGrid) moveLeft() {
 	if c.cursor > 1 {
@@ -143,21 +160,21 @@ func (c *calendarGrid) moveDown() {
 	}
 }
 
-// Range selection: move + select both origin and destination
+// ── Range selection: move + select origin and destination ──
 
 func (c *calendarGrid) moveLeftSelect() {
 	if c.cursor > 1 {
-		c.selected[c.cursor] = true
+		c.selected[c.dateStr(c.cursor)] = true
 		c.cursor--
-		c.selected[c.cursor] = true
+		c.selected[c.dateStr(c.cursor)] = true
 	}
 }
 
 func (c *calendarGrid) moveRightSelect() {
 	if c.cursor < c.daysInMonth() {
-		c.selected[c.cursor] = true
+		c.selected[c.dateStr(c.cursor)] = true
 		c.cursor++
-		c.selected[c.cursor] = true
+		c.selected[c.dateStr(c.cursor)] = true
 	}
 }
 
@@ -166,7 +183,7 @@ func (c *calendarGrid) moveUpSelect() {
 		start := c.cursor
 		c.cursor -= 7
 		for d := c.cursor; d <= start; d++ {
-			c.selected[d] = true
+			c.selected[c.dateStr(d)] = true
 		}
 	}
 }
@@ -176,10 +193,12 @@ func (c *calendarGrid) moveDownSelect() {
 		start := c.cursor
 		c.cursor += 7
 		for d := start; d <= c.cursor; d++ {
-			c.selected[d] = true
+			c.selected[c.dateStr(d)] = true
 		}
 	}
 }
+
+// ── Month navigation — selections persist ──
 
 func (c *calendarGrid) prevMonth() {
 	if c.month == time.January {
@@ -189,7 +208,6 @@ func (c *calendarGrid) prevMonth() {
 		c.month--
 	}
 	c.cursor = 1
-	c.selected = make(map[int]bool)
 }
 
 func (c *calendarGrid) nextMonth() {
@@ -200,13 +218,14 @@ func (c *calendarGrid) nextMonth() {
 		c.month++
 	}
 	c.cursor = 1
-	c.selected = make(map[int]bool)
 }
+
+// ── Rendering ──
 
 func (c *calendarGrid) render() string {
 	var b strings.Builder
 
-	// Month header with navigation
+	// Month header
 	monthName := strings.ToUpper(c.month.String())
 	header := fmt.Sprintf("◀  %s %d  ▶", monthName, c.year)
 	b.WriteString("      " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
@@ -214,7 +233,7 @@ func (c *calendarGrid) render() string {
 
 	// Day names header with week number spacer
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(4).Render(""))
-	dayNames := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+	dayNames := []string{"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
 	for _, d := range dayNames {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(cellWidth).Align(lipgloss.Center).Render(d))
 	}
@@ -272,23 +291,24 @@ func (c *calendarGrid) render() string {
 	stats = append(stats, fmt.Sprintf("%d weekends", weekends))
 	b.WriteString("\n    " + sDimmed.Render(strings.Join(stats, " · ")))
 
-	// Compact badge legend
+	// Color legend (dots only)
 	b.WriteString("\n    ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Bold(true).Render("T"))
-	b.WriteString(sDimmed.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("V"))
-	b.WriteString(sDimmed.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Bold(true).Render("H"))
-	b.WriteString(sDimmed.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("A"))
-	b.WriteString(sDimmed.Render(" · "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render("●"))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Render("●") + sDimmed.Render(" office  "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Render("●") + sDimmed.Render(" telework  "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Render("●") + sDimmed.Render(" holiday  "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Render("●") + sDimmed.Render(" absence  "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("●") + sDimmed.Render(" weekend"))
 
 	// Selected count
-	if len(c.selected) > 0 {
+	total := len(c.selected)
+	if total > 0 {
+		thisMonth := c.currentMonthSelectedCount()
+		label := fmt.Sprintf("%d selected", total)
+		if thisMonth < total {
+			label = fmt.Sprintf("%d selected (%d this month)", total, thisMonth)
+		}
 		b.WriteString("\n\n")
-		b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(
-			fmt.Sprintf("%d days selected", len(c.selected))))
+		b.WriteString("    " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(label))
 		b.WriteString("  " + sDimmed.Render("enter=action  x=clear"))
 	}
 
@@ -298,7 +318,7 @@ func (c *calendarGrid) render() string {
 	return b.String()
 }
 
-// renderDayDetail renders the rich context panel for the cursor day.
+// renderDayDetail renders the context panel for the cursor day.
 func (c *calendarGrid) renderDayDetail() string {
 	info := c.dayInfo(c.cursor)
 	if info == nil {
@@ -308,9 +328,10 @@ func (c *calendarGrid) renderDayDetail() string {
 	var b strings.Builder
 	b.WriteString("\n\n")
 
-	// Date + status
-	dateStyle := sValue
-	b.WriteString("  " + dateStyle.Render(info.Date) + "  ")
+	// Date + weekday + status
+	t, _ := time.Parse("2006-01-02", info.Date)
+	dateLabel := t.Format("Mon 2 Jan")
+	b.WriteString("    " + sValue.Render(dateLabel) + "  ")
 
 	switch info.Status {
 	case "working":
@@ -327,7 +348,6 @@ func (c *calendarGrid) renderDayDetail() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("Absence"))
 	}
 
-	// Event names (holidays, etc.)
 	if len(info.EventNames) > 0 {
 		b.WriteString("  " + sDimmed.Render(strings.Join(info.EventNames, ", ")))
 	}
@@ -349,7 +369,7 @@ func (c *calendarGrid) renderDayDetail() string {
 				statusStyle = lipgloss.NewStyle().Foreground(colorDanger)
 				statusIcon = "✗"
 			}
-			b.WriteString(fmt.Sprintf("    %s %s  %s",
+			b.WriteString(fmt.Sprintf("      %s %s  %s",
 				statusStyle.Render(statusIcon),
 				lipgloss.NewStyle().Foreground(colorText).Render(r.EventName),
 				statusStyle.Render(r.Status)))
@@ -360,7 +380,7 @@ func (c *calendarGrid) renderDayDetail() string {
 
 	// Sign slots
 	if len(info.Signs) > 0 {
-		b.WriteString("    ")
+		b.WriteString("      ")
 		for _, s := range info.Signs {
 			if s.In != "" {
 				b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Render("IN") + " " + sValue.Render(extractTimeFromDT(s.In)) + "  ")
@@ -375,7 +395,6 @@ func (c *calendarGrid) renderDayDetail() string {
 	return b.String()
 }
 
-// extractTimeFromDT extracts HH:MM from a datetime string.
 func extractTimeFromDT(dt string) string {
 	if idx := strings.Index(dt, "T"); idx != -1 {
 		t := dt[idx+1:]
@@ -388,20 +407,13 @@ func extractTimeFromDT(dt string) string {
 
 func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 	info := c.dayInfo(day)
-	badge := ""
-	if info != nil {
-		badge = info.Badge()
-	}
 
-	// Build cell content: "DD" or "DDb" where b is badge
+	// Numbers only — no badge letters
 	label := fmt.Sprintf("%2d", day)
-	if badge != "" {
-		label = fmt.Sprintf("%2d%s", day, badge)
-	}
 
 	style := lipgloss.NewStyle().Width(cellWidth).Align(lipgloss.Center)
 
-	// Color based on status
+	// Color based on day status
 	if info != nil {
 		switch info.Status {
 		case "weekend":
@@ -427,13 +439,14 @@ func (c *calendarGrid) renderDay(day, col int, isToday bool) string {
 	}
 
 	// Selected
-	if c.selected[day] {
+	ds := c.dateStr(day)
+	if c.selected[ds] {
 		style = style.Background(lipgloss.Color("#7c3aed")).Foreground(lipgloss.Color("#ffffff"))
 	}
 
 	// Cursor
 	if day == c.cursor {
-		if !c.selected[day] {
+		if !c.selected[ds] {
 			style = style.Background(lipgloss.Color("#374151"))
 		}
 		style = style.Bold(true)
