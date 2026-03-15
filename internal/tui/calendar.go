@@ -100,6 +100,25 @@ func (c *calendarGrid) selectedDayInfos() []*woffu.CalendarDay {
 	return infos
 }
 
+func (c *calendarGrid) monthStats() (working, telework, holidays, weekends, absences int) {
+	for _, d := range c.days {
+		switch d.Status {
+		case "working":
+			working++
+			if d.Mode == "remote" {
+				telework++
+			}
+		case "holiday":
+			holidays++
+		case "weekend":
+			weekends++
+		case "absence":
+			absences++
+		}
+	}
+	return
+}
+
 func (c *calendarGrid) moveLeft() {
 	if c.cursor > 1 {
 		c.cursor--
@@ -188,12 +207,13 @@ func (c *calendarGrid) render() string {
 	var b strings.Builder
 
 	// Month header with navigation
-	monthName := c.month.String()
+	monthName := strings.ToUpper(c.month.String())
 	header := fmt.Sprintf("◀  %s %d  ▶", monthName, c.year)
-	b.WriteString("  " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
+	b.WriteString("      " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
 	b.WriteString("\n\n")
 
-	// Day names
+	// Day names header with week number spacer
+	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(4).Render(""))
 	dayNames := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 	for _, d := range dayNames {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(cellWidth).Align(lipgloss.Center).Render(d))
@@ -212,6 +232,14 @@ func (c *calendarGrid) render() string {
 			break
 		}
 
+		// Week number
+		wkDay := day
+		if week == 0 {
+			wkDay = 1
+		}
+		_, wk := time.Date(c.year, c.month, wkDay, 0, 0, 0, 0, time.UTC).ISOWeek()
+		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(4).Render(fmt.Sprintf("%d", wk)))
+
 		for col := 0; col < 7; col++ {
 			if week == 0 && col < firstDay {
 				b.WriteString(strings.Repeat(" ", cellWidth))
@@ -228,14 +256,33 @@ func (c *calendarGrid) render() string {
 		b.WriteString("\n")
 	}
 
-	// Badge legend
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Bold(true).Render("T") + " telework  ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("V") + " vacation  ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Bold(true).Render("H") + " holiday  ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("A") + " absence  ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render("●") + " signed")
+	// Month stats
+	working, telework, holidays, weekends, absences := c.monthStats()
+	var stats []string
+	stats = append(stats, fmt.Sprintf("%d working", working))
+	if telework > 0 {
+		stats = append(stats, fmt.Sprintf("%d telework", telework))
+	}
+	if holidays > 0 {
+		stats = append(stats, fmt.Sprintf("%d holidays", holidays))
+	}
+	if absences > 0 {
+		stats = append(stats, fmt.Sprintf("%d absences", absences))
+	}
+	stats = append(stats, fmt.Sprintf("%d weekends", weekends))
+	b.WriteString("\n    " + sDimmed.Render(strings.Join(stats, " · ")))
+
+	// Compact badge legend
+	b.WriteString("\n    ")
+	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Bold(true).Render("T"))
+	b.WriteString(sDimmed.Render(" · "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("V"))
+	b.WriteString(sDimmed.Render(" · "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Bold(true).Render("H"))
+	b.WriteString(sDimmed.Render(" · "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("A"))
+	b.WriteString(sDimmed.Render(" · "))
+	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Bold(true).Render("●"))
 
 	// Selected count
 	if len(c.selected) > 0 {

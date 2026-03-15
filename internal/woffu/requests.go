@@ -1,6 +1,7 @@
 package woffu
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -49,10 +50,10 @@ type woffuAgreementEvent struct {
 	Name             string `json:"Name"`
 	IsVacation       bool   `json:"IsVacation"`
 	IsPresence       bool   `json:"IsPresence"`
-	UserStats        *struct {
-		AllocatedFormatted string `json:"AllocatedFormatted"`
-		UsedFormatted      string `json:"UsedFormatted"`
-		AvailableFormatted string `json:"AvailableFormatted"`
+	UserStats *struct {
+		AllocatedFormatted json.RawMessage `json:"AllocatedFormatted"`
+		UsedFormatted      json.RawMessage `json:"UsedFormatted"`
+		AvailableFormatted json.RawMessage `json:"AvailableFormatted"`
 	} `json:"UserStats"`
 }
 
@@ -96,9 +97,9 @@ func GetRequestTypes(companyClient *Client, token string) ([]RequestType, error)
 			IsPresence: e.IsPresence,
 		}
 		if e.UserStats != nil {
-			rt.Allocated = e.UserStats.AllocatedFormatted
-			rt.Used = e.UserStats.UsedFormatted
-			rt.Available = e.UserStats.AvailableFormatted
+			rt.Allocated = extractFormatted(e.UserStats.AllocatedFormatted)
+			rt.Used = extractFormatted(e.UserStats.UsedFormatted)
+			rt.Available = extractFormatted(e.UserStats.AvailableFormatted)
 		}
 		types = append(types, rt)
 	}
@@ -261,6 +262,25 @@ func GetUserIds(companyClient *Client, token string) (userId, companyId int, err
 		return 0, 0, err
 	}
 	return user.UserId, user.CompanyId, nil
+}
+
+// extractFormatted handles Woffu formatted fields that can be either a plain string
+// or an object like {"Resource": "...", "Values": ["..."]}.
+func extractFormatted(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var obj struct {
+		Values []string `json:"Values"`
+	}
+	if json.Unmarshal(raw, &obj) == nil && len(obj.Values) > 0 {
+		return obj.Values[0]
+	}
+	return ""
 }
 
 func requestStatusName(id int) string {

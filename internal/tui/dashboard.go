@@ -480,7 +480,8 @@ func (d *Dashboard) renderHeader() string {
 		name = fmt.Sprintf("woffux — %s", d.profile.FullName)
 	}
 	left := sTitle.Render(name)
-	right := sDimmed.Render(time.Now().Format("15:04"))
+	_, isoWeek := time.Now().ISOWeek()
+	right := sDimmed.Render(fmt.Sprintf("W%d  %s", isoWeek, time.Now().Format("15:04")))
 	gap := d.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 	if gap < 0 {
 		gap = 0
@@ -505,9 +506,27 @@ func (d *Dashboard) renderTabBar() string {
 func (d *Dashboard) renderStatusTab() string {
 	var parts []string
 
+	// Greeting + week
+	now := time.Now()
+	greetText := greeting(now)
+	if d.profile != nil {
+		firstName := strings.Split(d.profile.FullName, " ")[0]
+		if len(firstName) > 1 {
+			firstName = strings.ToUpper(firstName[:1]) + strings.ToLower(firstName[1:])
+		}
+		greetText += ", " + firstName
+	}
+	parts = append(parts, "\n  "+sSubtitle.Render(greetText))
+
 	// Sign info box
 	if d.signInfo != nil {
 		info := d.signInfo
+
+		// Full date with weekday
+		fullDate := info.Date
+		if t, err := time.Parse("2006-01-02", info.Date); err == nil {
+			fullDate = t.Format("Monday, 2 January 2006")
+		}
 
 		workingDay := sSuccess.Render("yes")
 		if !info.IsWorkingDay {
@@ -521,23 +540,54 @@ func (d *Dashboard) renderStatusTab() string {
 		mode := modeStyle.Render(fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
 
 		rows := []string{
-			sLabel.Render("Date") + sValue.Render(info.Date),
+			sLabel.Render("Date") + sValue.Render(fullDate),
 			sLabel.Render("Working day") + workingDay,
 			sLabel.Render("Mode") + mode,
+			sLabel.Render("Signed") + d.signStatusText(),
 		}
-		if info.IsWorkingDay {
-			rows = append(rows, sLabel.Render("Coordinates")+sDimmed.Render(fmt.Sprintf("%.4f, %.4f", info.Latitude, info.Longitude)))
-		}
-
-		// Sign status from slots
-		rows = append(rows, sLabel.Render("Signed")+d.signStatusText())
 
 		parts = append(parts, "\n"+sBox.Render(strings.Join(rows, "\n")))
+	}
+
+	// Hours worked + progress bar
+	if len(d.slots) > 0 {
+		worked, clockedIn := d.hoursWorkedToday()
+		target := d.targetHoursToday()
+
+		if target > 0 {
+			pct := int(float64(worked) / float64(target) * 100)
+			if pct > 100 {
+				pct = 100
+			}
+
+			barColor := colorSecondary
+			if pct >= 100 {
+				barColor = colorSuccess
+			}
+
+			bar := renderProgressBar(worked, target, 30)
+			label := "  Today's progress"
+			if clockedIn {
+				label += "  " + lipgloss.NewStyle().Foreground(colorSuccess).Render("● live")
+			}
+
+			progressLine := "  " + lipgloss.NewStyle().Foreground(barColor).Render(bar) +
+				"  " + sValue.Render(formatDuration(worked)) +
+				sDimmed.Render(" / "+formatDuration(target)) +
+				sDimmed.Render(fmt.Sprintf("  (%d%%)", pct))
+
+			parts = append(parts, "\n"+sSubtitle.Render(label)+"\n"+progressLine)
+		}
 	}
 
 	// Today's slots
 	if len(d.slots) > 0 {
 		parts = append(parts, d.renderSlots())
+	}
+
+	// Next scheduled sign
+	if next := d.nextScheduledSign(); next != "" {
+		parts = append(parts, "\n"+sLabel.Render("  Next sign")+sValue.Render(next))
 	}
 
 	// Schedule
@@ -1356,6 +1406,127 @@ func (d *Dashboard) clearFlashAfter(dur time.Duration) tea.Cmd {
 func (d *Dashboard) setFlash(text string, isErr bool) {
 	d.flash = text
 	d.flashErr = isErr
+}
+
+// ── Status helpers ──
+
+func greeting(t time.Time) string {
+	hour := t.Hour()
+	switch {
+	case hour < 12:
+		return "Good morning"
+	case hour < 18:
+		return "Good afternoon"
+	default:
+		return "Good evening"
+	}
+}
+
+func parseSlotTime(dt string) time.Time {
+	if dt == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{
+		"2006-01-02T15:04:05.000",
+		"2006-01-02T15:04:05",
+		"2006-01-02T15:04",
+	} {
+		if t, err := time.Parse(layout, dt); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func (d *Dashboard) hoursWorkedToday() (time.Duration, bool) {
+	var total time.Duration
+	clockedIn := false
+	now := time.Now()
+	for _, s := range d.slots {
+		inTime := parseSlotTime(s.In)
+		if inTime.IsZero() {
+			continue
+		}
+		outTime := parseSlotTime(s.Out)
+		if outTime.IsZero() {
+			todayIn := time.Date(now.Year(), now.Month(), now.Day(),
+				inTime.Hour(), inTime.Minute(), inTime.Second(), 0, now.Location())
+			total += now.Sub(todayIn)
+			clockedIn = true
+		} else {
+			total += outTime.Sub(inTime)
+		}
+	}
+	return total, clockedIn
+}
+
+func (d *Dashboard) todaySchedule() (config.DaySchedule, bool) {
+	switch time.Now().Weekday() {
+	case time.Monday:
+		return d.cfg.Schedule.Monday, d.cfg.Schedule.Monday.Enabled
+	case time.Tuesday:
+		return d.cfg.Schedule.Tuesday, d.cfg.Schedule.Tuesday.Enabled
+	case time.Wednesday:
+		return d.cfg.Schedule.Wednesday, d.cfg.Schedule.Wednesday.Enabled
+	case time.Thursday:
+		return d.cfg.Schedule.Thursday, d.cfg.Schedule.Thursday.Enabled
+	case time.Friday:
+		return d.cfg.Schedule.Friday, d.cfg.Schedule.Friday.Enabled
+	default:
+		return config.DaySchedule{}, false
+	}
+}
+
+func (d *Dashboard) targetHoursToday() time.Duration {
+	sched, enabled := d.todaySchedule()
+	if !enabled || len(sched.Times) < 2 {
+		return 0
+	}
+	var total time.Duration
+	for i := 0; i+1 < len(sched.Times); i += 2 {
+		inTime, err1 := time.Parse("15:04", sched.Times[i].Time)
+		outTime, err2 := time.Parse("15:04", sched.Times[i+1].Time)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		total += outTime.Sub(inTime)
+	}
+	return total
+}
+
+func (d *Dashboard) nextScheduledSign() string {
+	sched, enabled := d.todaySchedule()
+	if !enabled {
+		return ""
+	}
+	currentTime := time.Now().Format("15:04")
+	for _, t := range sched.Times {
+		if t.Time > currentTime {
+			return t.Time
+		}
+	}
+	return ""
+}
+
+func renderProgressBar(current, target time.Duration, width int) string {
+	if target <= 0 {
+		return strings.Repeat("░", width)
+	}
+	pct := float64(current) / float64(target)
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct * float64(width))
+	if filled > width {
+		filled = width
+	}
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+func formatDuration(d time.Duration) string {
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	return fmt.Sprintf("%dh %02dm", h, m)
 }
 
 func openBrowserCmd(url string) {
