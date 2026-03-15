@@ -168,37 +168,54 @@ var configEditCmd = &cobra.Command{
 			if err := config.Save(cfg); err != nil {
 				return fmt.Errorf("save config: %w", err)
 			}
-			fmt.Printf("  %s Config saved\n", sOk)
+			fmt.Printf("  %s Config saved locally\n", sOk)
 
-			// Offer to sync with GitHub
+			// Explain sync and offer it
 			if cfg.GithubFork != "" {
+				fmt.Println()
+				fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+					"  Your local config changed. GitHub Actions still uses the old values.\n" +
+						"  Sync pushes your new settings so auto-signing uses them."))
+				fmt.Println()
+
 				var sync bool
 				huh.NewForm(
 					huh.NewGroup(
 						huh.NewConfirm().
-							Title("Sync changes to GitHub?").
-							Description("Updates secrets and workflows in your fork").
-							Affirmative("Yes").
-							Negative("Skip").
+							Title("Push changes to GitHub now?").
+							Description(fmt.Sprintf("This updates secrets and workflows on %s", cfg.GithubFork)).
+							Affirmative("Sync now").
+							Negative("I'll do it later (woffuk sync)").
 							Value(&sync),
 					),
 				).Run()
 
 				if sync {
 					pw, _ := config.GetPassword(cfg.WoffuEmail)
-					var syncErr error
+					var secretsErr, workflowsErr error
 					spinner.New().
-						Title("Syncing...").
+						Title("Syncing to GitHub...").
 						Action(func() {
-							gh.SyncSecrets(cfg, pw)
-							syncErr = gh.SyncWorkflows(cfg)
+							secretsErr = gh.SyncSecrets(cfg, pw)
+							if secretsErr == nil {
+								workflowsErr = gh.SyncWorkflows(cfg)
+							}
 						}).
 						Run()
-					if syncErr != nil {
-						fmt.Printf("  %s Sync failed: %s\n", sWarn, syncErr)
+
+					if secretsErr != nil {
+						fmt.Printf("  %s Secrets failed: %s\n", sWarn, secretsErr)
+					} else if workflowsErr != nil {
+						fmt.Printf("  %s Secrets synced, but workflows failed: %s\n", sWarn, workflowsErr)
 					} else {
-						fmt.Printf("  %s GitHub synced\n", sOk)
+						fmt.Printf("  %s GitHub synced — auto-signing will use your new settings\n", sOk)
 					}
+				} else {
+					fmt.Printf("\n  %s Remember to run %s when you're ready.\n",
+						lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"),
+						lipgloss.NewStyle().Bold(true).Render("woffuk sync"))
+					fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+						"  Until then, auto-signing uses the previous settings."))
 				}
 			}
 		}
