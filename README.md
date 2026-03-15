@@ -57,7 +57,7 @@ sudo mv woffuk-darwin-arm64 /usr/local/bin/woffuk
 <summary><strong>Build from source (Go 1.24+)</strong></summary>
 
 ```bash
-go install github.com/ngavilan-dogfy/woffuk-cli@latest
+go install github.com/ngavilan-dogfy/woffuk-cli/cmd/woffuk@latest
 ```
 
 </details>

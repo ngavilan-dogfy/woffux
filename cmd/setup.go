@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -536,47 +537,42 @@ func openURL(url string) {
 	}
 }
 
-// loginFlow handles the full login with retries, error classification, and company detection.
+// loginFlow handles the full login with retries and error-specific re-prompts.
 func loginFlow() (email, password, company, companyURL string, profile *woffu.UserProfile, err error) {
-	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	attempt := 0
+	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+
+	// Initial credentials form
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Email").
+				Placeholder("you@company.com").
+				Value(&email).
+				Validate(func(s string) error {
+					if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
+						return fmt.Errorf("enter a valid email")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&password).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("password cannot be empty")
+					}
+					return nil
+				}),
+		).Title("Login to Woffu"),
+	).Run()
+	if err != nil {
+		return
+	}
+
+	company = extractCompany(email)
 
 	for {
-		attempt++
-
-		if attempt == 1 {
-			// First attempt: ask email + password
-			err = huh.NewForm(
-				huh.NewGroup(
-					huh.NewInput().
-						Title("Email").
-						Placeholder("you@company.com").
-						Value(&email).
-						Validate(func(s string) error {
-							if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
-								return fmt.Errorf("enter a valid email")
-							}
-							return nil
-						}),
-					huh.NewInput().
-						Title("Password").
-						EchoMode(huh.EchoModePassword).
-						Value(&password).
-						Validate(func(s string) error {
-							if s == "" {
-								return fmt.Errorf("password cannot be empty")
-							}
-							return nil
-						}),
-				).Title("Login to Woffu"),
-			).Run()
-			if err != nil {
-				return
-			}
-
-			company = extractCompany(email)
-		}
-
 		companyURL = "https://" + company + ".woffu.com"
 		client := woffu.NewWoffuClient("https://app.woffu.com/api")
 		companyClient := woffu.NewCompanyClient(companyURL)
@@ -584,8 +580,8 @@ func loginFlow() (email, password, company, companyURL string, profile *woffu.Us
 		var authErr error
 		var token string
 
-		spinErr := spinner.New().
-			Title(fmt.Sprintf("Connecting to %s...", companyURL)).
+		spinner.New().
+			Title(fmt.Sprintf("Signing in to %s...", company+".woffu.com")).
 			Action(func() {
 				token, authErr = woffu.Authenticate(client, companyClient, email, password)
 				if authErr == nil {
@@ -593,32 +589,34 @@ func loginFlow() (email, password, company, companyURL string, profile *woffu.Us
 				}
 			}).
 			Run()
-		if spinErr != nil {
-			err = spinErr
-			return
-		}
 
+		// Success
 		if authErr == nil {
-			// Success
 			return
 		}
 
-		// Classify the error and let the user fix it
-		errStr := authErr.Error()
+		// Classify error using typed AuthError
+		var ae *woffu.AuthError
+		var kind woffu.AuthErrorKind
+		if errors.As(authErr, &ae) {
+			kind = ae.Kind
+		} else {
+			kind = woffu.ErrUnknown
+		}
+
 		fmt.Println()
 
-		if strings.Contains(errStr, "UserNotFound") || strings.Contains(errStr, "use-new-login") {
-			// Bad email
-			fmt.Printf("  %s User not found. Check your email address.\n\n", sErr.Render("✗"))
-
+		switch kind {
+		case woffu.ErrBadEmail:
+			fmt.Printf("  %s Email not found: %s\n\n", sErr.Render("✗"), email)
 			err = huh.NewForm(
 				huh.NewGroup(
 					huh.NewInput().
 						Title("Email").
-						Description("The email you use to log into Woffu").
+						Description("Check for typos in your email address").
 						Value(&email).
 						Validate(func(s string) error {
-							if !strings.Contains(s, "@") {
+							if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
 								return fmt.Errorf("enter a valid email")
 							}
 							return nil
@@ -630,16 +628,14 @@ func loginFlow() (email, password, company, companyURL string, profile *woffu.Us
 			}
 			company = extractCompany(email)
 
-		} else if strings.Contains(errStr, "invalid_grant") || strings.Contains(errStr, "400") && strings.Contains(errStr, "token") {
-			// Bad password
-			fmt.Printf("  %s Wrong password. Try again.\n\n", sErr.Render("✗"))
-
+		case woffu.ErrBadPassword:
+			fmt.Printf("  %s Wrong password for %s\n\n", sErr.Render("✗"), email)
 			password = ""
 			err = huh.NewForm(
 				huh.NewGroup(
 					huh.NewInput().
 						Title("Password").
-						Description(fmt.Sprintf("For %s", email)).
+						Description(email).
 						EchoMode(huh.EchoModePassword).
 						Value(&password).
 						Validate(func(s string) error {
@@ -654,17 +650,15 @@ func loginFlow() (email, password, company, companyURL string, profile *woffu.Us
 				return
 			}
 
-		} else if strings.Contains(errStr, "company token") || strings.Contains(errStr, "404") || strings.Contains(errStr, "no such host") {
-			// Bad company / subdomain
-			fmt.Printf("  %s Company \"%s\" not found on Woffu.\n\n", sErr.Render("✗"), company)
-
+		case woffu.ErrBadCompany:
+			fmt.Printf("  %s Company \"%s\" not found on Woffu\n\n", sErr.Render("✗"), company)
 			company = ""
 			err = huh.NewForm(
 				huh.NewGroup(
 					huh.NewInput().
 						Title("Company subdomain").
-						Description("The part before .woffu.com (e.g. dogfydiet)").
-						Placeholder("yourcompany").
+						Description("The part before .woffu.com").
+						Placeholder("dogfydiet").
 						Value(&company).
 						Validate(func(s string) error {
 							if s == "" {
@@ -678,27 +672,49 @@ func loginFlow() (email, password, company, companyURL string, profile *woffu.Us
 				return
 			}
 
-		} else {
-			// Unknown error — show it and let them retry everything
-			fmt.Printf("  %s %s\n\n", sErr.Render("✗"), errStr)
-
+		case woffu.ErrNetwork:
+			fmt.Printf("  %s Cannot connect to Woffu. Check your internet connection.\n\n", sErr.Render("✗"))
 			var retry bool
 			huh.NewForm(
 				huh.NewGroup(
-					huh.NewConfirm().
-						Title("Try again?").
-						Affirmative("Yes").
-						Negative("Quit").
-						Value(&retry),
+					huh.NewConfirm().Title("Retry?").Affirmative("Yes").Negative("Quit").Value(&retry),
 				),
 			).Run()
-
 			if !retry {
 				err = fmt.Errorf("login cancelled")
 				return
 			}
 
-			attempt = 0 // Reset to ask email+password again
+		default:
+			fmt.Printf("  %s Login failed: %s\n\n", sErr.Render("✗"), authErr.Error())
+			var retry bool
+			huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().Title("Try again from scratch?").Affirmative("Yes").Negative("Quit").Value(&retry),
+				),
+			).Run()
+			if !retry {
+				err = fmt.Errorf("login cancelled")
+				return
+			}
+			// Reset and ask everything again
+			email, password = "", ""
+			err = huh.NewForm(
+				huh.NewGroup(
+					huh.NewInput().Title("Email").Placeholder("you@company.com").Value(&email).
+						Validate(func(s string) error {
+							if !strings.Contains(s, "@") {
+								return fmt.Errorf("enter a valid email")
+							}
+							return nil
+						}),
+					huh.NewInput().Title("Password").EchoMode(huh.EchoModePassword).Value(&password),
+				).Title("Login to Woffu"),
+			).Run()
+			if err != nil {
+				return
+			}
+			company = extractCompany(email)
 		}
 	}
 }

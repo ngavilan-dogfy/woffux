@@ -24,10 +24,10 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
-          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk-darwin-arm64  .
-          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk-darwin-amd64  .
-          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk-linux-amd64   .
-          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk-linux-arm64   .
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk ./cmd/woffuk-darwin-arm64  .
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk ./cmd/woffuk-darwin-amd64  .
+          GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/woffuk ./cmd/woffuk-linux-amd64   .
+          GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/woffuk ./cmd/woffuk-linux-arm64   .
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
