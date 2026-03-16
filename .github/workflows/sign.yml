@@ -2,18 +2,18 @@ name: Auto Sign
 
 on:
   schedule:
-    - cron: '10 7 * 1-3,11-12 1,2,3,4'  # Mon-Tue-Wed-Thu 08:10 (UTC+1, standard)
-    - cron: '10 6 * 4-10 1,2,3,4'  # Mon-Tue-Wed-Thu 08:10 (UTC+2, DST)
-    - cron: '40 12 * 1-3,11-12 1,2,3,4'  # Mon-Tue-Wed-Thu 13:40 (UTC+1, standard)
-    - cron: '40 11 * 4-10 1,2,3,4'  # Mon-Tue-Wed-Thu 13:40 (UTC+2, DST)
-    - cron: '32 13 * 1-3,11-12 1,2,3,4'  # Mon-Tue-Wed-Thu 14:32 (UTC+1, standard)
-    - cron: '32 12 * 4-10 1,2,3,4'  # Mon-Tue-Wed-Thu 14:32 (UTC+2, DST)
-    - cron: '31 16 * 1-3,11-12 1,2,3,4'  # Mon-Tue-Wed-Thu 17:31 (UTC+1, standard)
-    - cron: '31 15 * 4-10 1,2,3,4'  # Mon-Tue-Wed-Thu 17:31 (UTC+2, DST)
-    - cron: '30 7 * 1-3,11-12 5'  # Fri 08:30 (UTC+1, standard)
-    - cron: '30 6 * 4-10 5'  # Fri 08:30 (UTC+2, DST)
-    - cron: '10 14 * 1-3,11-12 5'  # Fri 15:10 (UTC+1, standard)
-    - cron: '10 13 * 4-10 5'  # Fri 15:10 (UTC+2, DST)
+    - cron: '10 7 * 1-3,10-12 1,2,3,4'  # Mon-Tue-Wed-Thu 08:10 (UTC+1, standard)
+    - cron: '10 6 * 3-10 1,2,3,4'  # Mon-Tue-Wed-Thu 08:10 (UTC+2, DST)
+    - cron: '40 12 * 1-3,10-12 1,2,3,4'  # Mon-Tue-Wed-Thu 13:40 (UTC+1, standard)
+    - cron: '40 11 * 3-10 1,2,3,4'  # Mon-Tue-Wed-Thu 13:40 (UTC+2, DST)
+    - cron: '32 13 * 1-3,10-12 1,2,3,4'  # Mon-Tue-Wed-Thu 14:32 (UTC+1, standard)
+    - cron: '32 12 * 3-10 1,2,3,4'  # Mon-Tue-Wed-Thu 14:32 (UTC+2, DST)
+    - cron: '31 16 * 1-3,10-12 1,2,3,4'  # Mon-Tue-Wed-Thu 17:31 (UTC+1, standard)
+    - cron: '31 15 * 3-10 1,2,3,4'  # Mon-Tue-Wed-Thu 17:31 (UTC+2, DST)
+    - cron: '30 7 * 1-3,10-12 5'  # Fri 08:30 (UTC+1, standard)
+    - cron: '30 6 * 3-10 5'  # Fri 08:30 (UTC+2, DST)
+    - cron: '10 14 * 1-3,10-12 5'  # Fri 15:10 (UTC+1, standard)
+    - cron: '10 13 * 3-10 5'  # Fri 15:10 (UTC+2, DST)
 
 concurrency:
   group: sign
@@ -24,15 +24,40 @@ jobs:
     name: Sign in Woffu
     runs-on: ubuntu-latest
     steps:
+      - name: Timezone guard
+        id: tz
+        run: |
+          CRON_HOUR=$(echo "${{ github.event.schedule }}" | awk '{print $2}')
+          # Current UTC offset (in hours) for the configured timezone
+          OFFSET=$(TZ=Europe/Madrid date +%z | sed 's/00$//;s/^+0/+/;s/^+//')
+          LOCAL_HOUR=$(( CRON_HOUR + OFFSET ))
+          if [ "$LOCAL_HOUR" -lt 0 ]; then LOCAL_HOUR=$(( LOCAL_HOUR + 24 )); fi
+          if [ "$LOCAL_HOUR" -ge 24 ]; then LOCAL_HOUR=$(( LOCAL_HOUR - 24 )); fi
+          SIGN_HOURS="8 13 14 17 15"
+          MATCH=false
+          for h in $SIGN_HOURS; do
+            if [ "$LOCAL_HOUR" -eq "$h" ]; then MATCH=true; break; fi
+          done
+          if [ "$MATCH" = "false" ]; then
+            echo "Skipping: cron hour $CRON_HOUR + offset $OFFSET = local $LOCAL_HOUR, not a configured sign hour"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
       - name: Download woffux
+        if: steps.tz.outputs.skip != 'true'
         run: |
           curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
           chmod +x woffux
 
       - name: Random delay (2-5 min)
-        run: sleep $(( RANDOM % 181 + 120 ))
+        if: steps.tz.outputs.skip != 'true'
+        run: sleep $(( RANDOM %% 181 + 120 ))
 
       - name: Sign
+        if: steps.tz.outputs.skip != 'true'
         run: ./woffux sign
         env:
           WOFFU_URL: ${{ secrets.WOFFU_URL }}
