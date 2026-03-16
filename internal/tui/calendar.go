@@ -168,28 +168,72 @@ func (c *calendarGrid) monthStats() (working, telework, holidays, weekends, abse
 
 // ── Navigation ──
 
-func (c *calendarGrid) moveLeft() {
+// moveLeft moves cursor left; returns true if month changed (needs data fetch).
+func (c *calendarGrid) moveLeft() bool {
 	if c.cursor > 1 {
 		c.cursor--
+		return false
 	}
+	// At first day — go to previous month
+	c.prevMonth()
+	c.cursor = c.daysInMonth()
+	return true
 }
 
-func (c *calendarGrid) moveRight() {
+// moveRight moves cursor right; returns true if month changed (needs data fetch).
+func (c *calendarGrid) moveRight() bool {
 	if c.cursor < c.daysInMonth() {
 		c.cursor++
+		return false
 	}
+	// At last day — go to next month
+	c.nextMonth()
+	c.cursor = 1
+	return true
 }
 
-func (c *calendarGrid) moveUp() {
+// moveUp moves cursor up by one week; returns true if month changed.
+func (c *calendarGrid) moveUp() bool {
 	if c.cursor > 7 {
 		c.cursor -= 7
+		return false
 	}
+	// Would go before day 1 — go to previous month, keeping relative position
+	targetDay := c.cursor + c.daysInPrevMonth() - 7
+	c.prevMonth()
+	dim := c.daysInMonth()
+	if targetDay > dim {
+		targetDay = dim
+	}
+	if targetDay < 1 {
+		targetDay = 1
+	}
+	c.cursor = targetDay
+	return true
 }
 
-func (c *calendarGrid) moveDown() {
+// moveDown moves cursor down by one week; returns true if month changed.
+func (c *calendarGrid) moveDown() bool {
 	if c.cursor+7 <= c.daysInMonth() {
 		c.cursor += 7
+		return false
 	}
+	// Would go past last day — go to next month
+	overflow := c.cursor + 7 - c.daysInMonth()
+	c.nextMonth()
+	dim := c.daysInMonth()
+	if overflow > dim {
+		overflow = dim
+	}
+	c.cursor = overflow
+	return true
+}
+
+func (c *calendarGrid) daysInPrevMonth() int {
+	if c.month == time.January {
+		return time.Date(c.year-1, time.December+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	}
+	return time.Date(c.year, c.month, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
 // ── Range selection: move + select origin and destination ──

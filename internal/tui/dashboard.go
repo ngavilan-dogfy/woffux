@@ -302,18 +302,30 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ── Calendar tab keys ──
 	if d.activeTab == tabCalendar && d.cal != nil && d.overlay == overlayNone {
 		switch key {
-		// Navigation
+		// Navigation (arrows cross month boundaries)
 		case "left", "h":
-			d.cal.moveLeft()
+			if d.cal.moveLeft() {
+				d.loading = true
+				return d, d.fetchCalendarData()
+			}
 			return d, nil
 		case "right", "l":
-			d.cal.moveRight()
+			if d.cal.moveRight() {
+				d.loading = true
+				return d, d.fetchCalendarData()
+			}
 			return d, nil
 		case "up", "k":
-			d.cal.moveUp()
+			if d.cal.moveUp() {
+				d.loading = true
+				return d, d.fetchCalendarData()
+			}
 			return d, nil
 		case "down", "j":
-			d.cal.moveDown()
+			if d.cal.moveDown() {
+				d.loading = true
+				return d, d.fetchCalendarData()
+			}
 			return d, nil
 
 		// Range selection (shift+arrows)

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -86,10 +87,10 @@ Examples:
 				in := sDim.Render("—")
 				out := sDim.Render("—")
 				if s.In != "" {
-					in = sIn.Render("IN  " + s.In)
+					in = sIn.Render("IN  " + slotTime(s.In))
 				}
 				if s.Out != "" {
-					out = sOut.Render("OUT " + s.Out)
+					out = sOut.Render("OUT " + slotTime(s.Out))
 				}
 				fmt.Printf("    Block %d:  %s  %s\n", i+1, in, out)
 			}
@@ -98,6 +99,20 @@ Examples:
 
 		return nil
 	},
+}
+
+// slotTime extracts a short time (HH:MM) from a slot datetime string.
+func slotTime(dt string) string {
+	if idx := strings.Index(dt, "T"); idx != -1 {
+		t := dt[idx+1:]
+		if len(t) >= 5 {
+			return t[:5]
+		}
+	}
+	if len(dt) >= 5 {
+		return dt[:5]
+	}
+	return dt
 }
 
 func init() {

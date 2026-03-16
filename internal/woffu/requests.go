@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // RequestType is an available request type (vacation, telework, etc).
@@ -76,27 +77,40 @@ type woffuSignSlot struct {
 }
 
 // extractSlotValue parses a sign slot field that can be either a JSON string
-// or a JSON object with a "Date" or "TrueDate" field.
+// (e.g. "2026-03-16T08:10:00.000") or a JSON object like:
+//
+//	{"ShortTrueTime": "09:18:31", "SignEventId": "...", "SignType": 0}
+//
+// When the API returns an object, we construct a full datetime using today's date
+// so that downstream code (progress bar, timeline) can parse it uniformly.
 func extractSlotValue(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
 	}
-	// Try string first
+	// Try string first (old API format)
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		return s
 	}
-	// Try object with common Woffu fields
+	// Try object (new API format)
 	var obj struct {
-		TrueDate string `json:"TrueDate"`
-		Date     string `json:"Date"`
-		TrueTime string `json:"TrueTime"`
+		ShortTrueTime string `json:"ShortTrueTime"`
+		TrueDate      string `json:"TrueDate"`
+		Date          string `json:"Date"`
 	}
 	if json.Unmarshal(raw, &obj) == nil {
+		// Prefer full datetime fields
 		if obj.TrueDate != "" {
 			return obj.TrueDate
 		}
-		return obj.Date
+		if obj.Date != "" {
+			return obj.Date
+		}
+		// Build datetime from time-only field + today's date
+		if obj.ShortTrueTime != "" {
+			today := time.Now().Format("2006-01-02")
+			return today + "T" + obj.ShortTrueTime
+		}
 	}
 	return ""
 }
