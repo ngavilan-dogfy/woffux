@@ -515,7 +515,7 @@ func (d *Dashboard) renderTabBar() string {
 func (d *Dashboard) renderStatusTab() string {
 	var parts []string
 
-	// Greeting + week
+	// Greeting
 	now := time.Now()
 	greetText := greeting(now)
 	if d.profile != nil {
@@ -527,82 +527,64 @@ func (d *Dashboard) renderStatusTab() string {
 	}
 	parts = append(parts, "\n  "+sSubtitle.Render(greetText))
 
-	// Sign info box
+	// Compact info box: date + mode + clocked status on 2 lines
 	if d.signInfo != nil {
 		info := d.signInfo
 
-		// Full date with weekday
-		fullDate := info.Date
+		shortDate := info.Date
 		if t, err := time.Parse("2006-01-02", info.Date); err == nil {
-			fullDate = t.Format("Monday, 2 January 2006")
-		}
-
-		workingDay := sSuccess.Render("yes")
-		if !info.IsWorkingDay {
-			workingDay = sDanger.Render("no")
+			shortDate = t.Format("Mon, 2 January 2006")
 		}
 
 		modeStyle := sDimmed
 		if info.Mode == woffu.SignModeRemote {
 			modeStyle = sSuccess
 		}
-		mode := modeStyle.Render(fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
+		modeText := modeStyle.Render(fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
 
-		rows := []string{
-			sLabel.Render("Date") + sValue.Render(fullDate),
-			sLabel.Render("Working day") + workingDay,
-			sLabel.Render("Mode") + mode,
-			sLabel.Render("Signed") + d.signStatusText(),
+		clockStatus := d.signStatusText()
+
+		row1 := sValue.Render(shortDate)
+		row2 := modeText + "    " + clockStatus
+
+		parts = append(parts, "\n"+sInfoBox.Render(row1+"\n"+row2))
+	}
+
+	// Progress bar -- always visible when we have a target, even with 0 slots
+	worked, clockedIn := d.hoursWorkedToday()
+	target := d.targetHoursToday()
+	if target > 0 {
+		pct := int(float64(worked) / float64(target) * 100)
+		if pct > 100 {
+			pct = 100
 		}
 
-		parts = append(parts, "\n"+sBox.Render(strings.Join(rows, "\n")))
-	}
-
-	// Hours worked + progress bar
-	if len(d.slots) > 0 {
-		worked, clockedIn := d.hoursWorkedToday()
-		target := d.targetHoursToday()
-
-		if target > 0 {
-			pct := int(float64(worked) / float64(target) * 100)
-			if pct > 100 {
-				pct = 100
-			}
-
-			barColor := colorSecondary
-			if pct >= 100 {
-				barColor = colorSuccess
-			}
-
-			bar := renderProgressBar(worked, target, 30)
-			label := "  Today's progress"
-			if clockedIn {
-				label += "  " + lipgloss.NewStyle().Foreground(colorSuccess).Render("● live")
-			}
-
-			progressLine := "  " + lipgloss.NewStyle().Foreground(barColor).Render(bar) +
-				"  " + sValue.Render(formatDuration(worked)) +
-				sDimmed.Render(" / "+formatDuration(target)) +
-				sDimmed.Render(fmt.Sprintf("  (%d%%)", pct))
-
-			parts = append(parts, "\n"+sSubtitle.Render(label)+"\n"+progressLine)
+		barColor := colorSecondary
+		if pct >= 100 {
+			barColor = colorSuccess
 		}
+
+		bar := renderProgressBar(worked, target, 30)
+		label := "  Today's progress"
+		if clockedIn {
+			label += "  " + sLiveIndicator.Render("● live")
+		}
+
+		progressLine := "  " + lipgloss.NewStyle().Foreground(barColor).Render(bar) +
+			"  " + sValue.Render(formatDuration(worked)) +
+			sDimmed.Render(" / "+formatDuration(target)) +
+			sDimmed.Render(fmt.Sprintf("  (%d%%)", pct))
+
+		parts = append(parts, "\n"+sSubtitle.Render(label)+"\n"+progressLine)
 	}
 
-	// Today's slots
-	if len(d.slots) > 0 {
-		parts = append(parts, d.renderSlots())
-	}
+	// Timeline (today's signs as a vertical timeline)
+	parts = append(parts, d.renderSlots())
 
-	// Next scheduled sign
-	if next := d.nextScheduledSign(); next != "" {
-		parts = append(parts, "\n"+sLabel.Render("  Next sign")+sValue.Render(next))
-	}
+	// Next scheduled sign with type + countdown
+	parts = append(parts, d.nextScheduledSign())
 
-	// Schedule
-	parts = append(parts, d.renderSchedule())
-
-	// Auto-sign status
+	// Auto-sign status (collapsed schedule section)
 	parts = append(parts, d.renderAutoSign())
 
 	return strings.Join(parts, "\n")
@@ -610,38 +592,54 @@ func (d *Dashboard) renderStatusTab() string {
 
 func (d *Dashboard) signStatusText() string {
 	if len(d.slots) == 0 {
-		return sDanger.Render("not signed yet")
+		return sDimmed.Render("○") + " " + sDanger.Render("not signed")
 	}
 
-	// Check last slot to determine current state
 	lastSlot := d.slots[len(d.slots)-1]
 	if lastSlot.Out != "" {
-		return sSuccess.Render(fmt.Sprintf("clocked out (%d signs)", len(d.slots)*2))
+		return sDimmed.Render("○") + " " + sDimmed.Render("clocked out")
 	}
 	if lastSlot.In != "" {
-		return sSuccess.Render("clocked in")
+		return sLiveIndicator.Render("●") + " " + sSuccess.Render("clocked in")
 	}
 
-	return sDimmed.Render(fmt.Sprintf("%d slots", len(d.slots)))
+	return sDimmed.Render("○") + " " + sDimmed.Render(fmt.Sprintf("%d slots", len(d.slots)))
 }
 
 func (d *Dashboard) renderSlots() string {
+	if len(d.slots) == 0 {
+		return ""
+	}
+
+	header := d.renderSectionLine("Timeline")
 	var rows []string
-	for i, s := range d.slots {
-		in := sDimmed.Render("  —  ")
-		out := sDimmed.Render("  —  ")
+
+	for _, s := range d.slots {
 		if s.In != "" {
-			// Extract time from datetime
 			inTime := extractTime(s.In)
-			in = sSignIn.Render("IN") + "  " + sValue.Render(inTime)
+			marker := sSignIn.Render("\u25B6") // ▶
+			label := sSignIn.Render("IN ")
+			timeStr := sValue.Render(inTime)
+
+			// If this slot has no OUT, show a track line to "now"
+			if s.Out == "" {
+				track := sTimelineTrack.Render("  " + strings.Repeat("\u2501", 15) + " ") // ━
+				nowLabel := sNowMarker.Render("now")
+				rows = append(rows, fmt.Sprintf("  %s %s  %s%s%s", marker, timeStr, label, track, nowLabel))
+			} else {
+				rows = append(rows, fmt.Sprintf("  %s %s  %s", marker, timeStr, label))
+			}
 		}
 		if s.Out != "" {
 			outTime := extractTime(s.Out)
-			out = sSignOut.Render("OUT") + " " + sValue.Render(outTime)
+			marker := sSignOut.Render("\u25A0") // ■
+			label := sSignOut.Render("OUT")
+			timeStr := sValue.Render(outTime)
+			rows = append(rows, fmt.Sprintf("  %s %s  %s", marker, timeStr, label))
 		}
-		rows = append(rows, fmt.Sprintf("    %d. %s   %s", i+1, in, out))
 	}
-	return "\n" + sSubtitle.Render("  Today's signs") + "\n" + strings.Join(rows, "\n")
+
+	return "\n" + header + "\n" + strings.Join(rows, "\n")
 }
 
 func extractTime(datetime string) string {
@@ -682,6 +680,26 @@ func (d *Dashboard) renderCalendarTab() string {
 
 // ── Render: schedule section ──
 
+// renderSectionLine renders a section divider: "── Title ──────────────"
+func (d *Dashboard) renderSectionLine(title string) string {
+	prefix := "\u2500\u2500 " // ──
+	suffix := " "
+	titleRendered := sSectionHeader.Render(prefix) + sSubtitle.Render(title) + sSectionHeader.Render(suffix)
+	// Fill remaining width with ─
+	titleWidth := lipgloss.Width(titleRendered)
+	maxWidth := 40
+	if d.width > 4 && d.width-4 < maxWidth {
+		maxWidth = d.width - 4
+	}
+	remaining := maxWidth - titleWidth
+	if remaining < 0 {
+		remaining = 0
+	}
+	return "  " + titleRendered + sSectionHeader.Render(strings.Repeat("\u2500", remaining))
+}
+
+// renderSchedule is no longer shown in the status tab (redundant with timeline + next sign).
+// Kept for potential reuse in other views.
 func (d *Dashboard) renderSchedule() string {
 	s := d.cfg.Schedule
 	days := []struct {
@@ -720,7 +738,9 @@ func (d *Dashboard) renderAutoSign() string {
 	} else if d.cfg.GithubFork == "" {
 		status = sDimmed.Render("not set up")
 	}
-	return "\n" + sLabel.Render("  Auto-sign") + status
+
+	header := d.renderSectionLine("Schedule")
+	return "\n" + header + "\n  " + sDimmed.Render("Auto-sign") + "  " + status
 }
 
 // ── Render: footer help ──
@@ -1530,10 +1550,46 @@ func (d *Dashboard) nextScheduledSign() string {
 	if !enabled {
 		return ""
 	}
-	currentTime := time.Now().Format("15:04")
-	for _, t := range sched.Times {
+
+	now := time.Now()
+	currentTime := now.Format("15:04")
+
+	for i, t := range sched.Times {
 		if t.Time > currentTime {
-			return t.Time
+			// Determine sign type: even index = IN, odd index = OUT
+			signType := "IN "
+			marker := sSignIn.Render("\u25B6") // ▶
+			typeLabel := sSignIn.Render(signType)
+			if i%2 != 0 {
+				signType = "OUT"
+				marker = sSignOut.Render("\u25A0") // ■
+				typeLabel = sSignOut.Render(signType)
+			}
+
+			// Calculate countdown
+			nextTime, err := time.Parse("15:04", t.Time)
+			countdown := ""
+			if err == nil {
+				nextFull := time.Date(now.Year(), now.Month(), now.Day(),
+					nextTime.Hour(), nextTime.Minute(), 0, 0, now.Location())
+				diff := nextFull.Sub(now)
+				if diff > 0 {
+					h := int(diff.Hours())
+					m := int(diff.Minutes()) % 60
+					if h > 0 {
+						countdown = fmt.Sprintf("in %dh %dm", h, m)
+					} else {
+						countdown = fmt.Sprintf("in %dm", m)
+					}
+				}
+			}
+
+			header := d.renderSectionLine("Next")
+			line := fmt.Sprintf("  %s %s  %s", marker, sValue.Render(t.Time), typeLabel)
+			if countdown != "" {
+				line += "    " + sCountdown.Render(countdown)
+			}
+			return "\n" + header + "\n" + line
 		}
 	}
 	return ""

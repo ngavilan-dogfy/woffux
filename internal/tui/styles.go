@@ -70,6 +70,30 @@ var (
 
 	sSignIn  = lipgloss.NewStyle().Foreground(colorSuccess)
 	sSignOut = lipgloss.NewStyle().Foreground(colorDanger)
+
+	// New styles for redesigned status tab
+	sSectionHeader = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	sInfoBox = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorDim).
+			Padding(0, 2)
+
+	sLiveIndicator = lipgloss.NewStyle().
+			Foreground(colorSuccess).
+			Bold(true)
+
+	sCountdown = lipgloss.NewStyle().
+			Foreground(colorMuted).
+			Italic(true)
+
+	sTimelineTrack = lipgloss.NewStyle().
+			Foreground(colorDim)
+
+	sNowMarker = lipgloss.NewStyle().
+			Foreground(colorWarning).
+			Bold(true)
 )
 
 // hint renders a keyboard shortcut hint: key in cyan + description in gray.
