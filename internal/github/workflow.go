@@ -204,7 +204,7 @@ jobs:
           chmod +x woffux
 
       - name: Random delay (2-5 min)%s
-        run: sleep $(( RANDOM %%%% 181 + 120 ))
+        run: sleep $(( RANDOM %% 181 + 120 ))
 
       - name: Sign%s
         run: ./woffux sign

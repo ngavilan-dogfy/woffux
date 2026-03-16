@@ -54,7 +54,7 @@ jobs:
 
       - name: Random delay (2-5 min)
         if: steps.tz.outputs.skip != 'true'
-        run: sleep $(( RANDOM %% 181 + 120 ))
+        run: sleep $(( RANDOM % 181 + 120 ))
 
       - name: Sign
         if: steps.tz.outputs.skip != 'true'
