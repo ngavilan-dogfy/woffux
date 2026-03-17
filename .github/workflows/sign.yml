@@ -1,0 +1,67 @@
+name: Auto Sign
+
+on:
+  schedule:
+    - cron: '30 6,7 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+1/UTC+2)
+    - cron: '30 11,12 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 13:30 (UTC+1/UTC+2)
+    - cron: '15 12,13 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 14:15 (UTC+1/UTC+2)
+    - cron: '30 15,16 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+1/UTC+2)
+    - cron: '0 6,7 * * 5'  # Fri 08:00 (UTC+1/UTC+2)
+    - cron: '0 13,14 * * 5'  # Fri 15:00 (UTC+1/UTC+2)
+
+concurrency:
+  group: sign
+  cancel-in-progress: true
+
+jobs:
+  sign:
+    name: Sign in Woffu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Timezone guard
+        id: tz
+        run: |
+          CRON_MIN=$(echo "${{ github.event.schedule }}" | awk '{print $1}')
+          CRON_HOUR=$(echo "${{ github.event.schedule }}" | awk '{print $2}')
+          OFFSET=$(TZ=Europe/Madrid date +%z | sed 's/00$//;s/^+0/+/;s/^+//')
+          LOCAL_HOUR=$(( CRON_HOUR + OFFSET ))
+          if [ "$LOCAL_HOUR" -lt 0 ]; then LOCAL_HOUR=$(( LOCAL_HOUR + 24 )); fi
+          if [ "$LOCAL_HOUR" -ge 24 ]; then LOCAL_HOUR=$(( LOCAL_HOUR - 24 )); fi
+          LOCAL_TIME=$(printf "%02d:%02d" "$LOCAL_HOUR" "$CRON_MIN")
+          SIGN_TIMES="17:30 08:00 15:00 08:30 13:30 14:15"
+          MATCH=false
+          for t in $SIGN_TIMES; do
+            if [ "$LOCAL_TIME" = "$t" ]; then MATCH=true; break; fi
+          done
+          if [ "$MATCH" = "false" ]; then
+            echo "Skipping: cron $CRON_HOUR:$CRON_MIN + offset $OFFSET = local $LOCAL_TIME, not a configured sign time"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+
+      - name: Download woffux
+        if: steps.tz.outputs.skip != 'true'
+        run: |
+          curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
+          chmod +x woffux
+
+      - name: Random delay (2-5 min)
+        if: steps.tz.outputs.skip != 'true'
+        run: sleep $(( RANDOM % 181 + 120 ))
+
+      - name: Sign
+        if: steps.tz.outputs.skip != 'true'
+        run: ./woffux sign
+        env:
+          WOFFU_URL: ${{ secrets.WOFFU_URL }}
+          WOFFU_COMPANY_URL: ${{ secrets.WOFFU_COMPANY_URL }}
+          WOFFU_EMAIL: ${{ secrets.WOFFU_EMAIL }}
+          WOFFU_PASSWORD: ${{ secrets.WOFFU_PASSWORD }}
+          WOFFU_LATITUDE: ${{ secrets.WOFFU_LATITUDE }}
+          WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
+          WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
+          WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
