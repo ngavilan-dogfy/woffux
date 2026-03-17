@@ -1,0 +1,32 @@
+name: Manual Sign
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sign
+  cancel-in-progress: true
+
+jobs:
+  sign:
+    name: Sign in Woffu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download woffux
+        run: |
+          curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
+          chmod +x woffux
+
+      - name: Sign
+        run: ./woffux sign
+        env:
+          WOFFU_URL: ${{ secrets.WOFFU_URL }}
+          WOFFU_COMPANY_URL: ${{ secrets.WOFFU_COMPANY_URL }}
+          WOFFU_EMAIL: ${{ secrets.WOFFU_EMAIL }}
+          WOFFU_PASSWORD: ${{ secrets.WOFFU_PASSWORD }}
+          WOFFU_LATITUDE: ${{ secrets.WOFFU_LATITUDE }}
+          WOFFU_LONGITUDE: ${{ secrets.WOFFU_LONGITUDE }}
+          WOFFU_HOME_LATITUDE: ${{ secrets.WOFFU_HOME_LATITUDE }}
+          WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
