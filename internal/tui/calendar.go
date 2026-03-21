@@ -11,7 +11,7 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
-const cellWidth = 5
+const cellWidth = 6
 
 // calendarGrid renders a visual monthly calendar with colored days.
 type calendarGrid struct {
@@ -301,15 +301,30 @@ func (c *calendarGrid) nextMonth() {
 func (c *calendarGrid) render() string {
 	var b strings.Builder
 
-	// Month header
+	// Month header — prominent with navigation arrows
 	monthName := strings.ToUpper(c.month.String())
-	header := fmt.Sprintf("◀  %s %d  ▶", monthName, c.year)
-	b.WriteString("      " + lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(header))
-	b.WriteString("\n\n")
+	leftArrow := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("\u25C0") // ◀
+	rightArrow := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("\u25B6") // ▶
+	monthLabel := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(monthName)
+	yearLabel := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render(fmt.Sprintf("%d", c.year))
+	header := fmt.Sprintf("%s   %s %s   %s", leftArrow, monthLabel, yearLabel, rightArrow)
+
+	// Center the header over the grid (4 + 7*cellWidth)
+	gridWidth := 4 + 7*cellWidth
+	headerWidth := lipgloss.Width(header)
+	headerPad := (gridWidth - headerWidth) / 2
+	if headerPad < 0 {
+		headerPad = 0
+	}
+	b.WriteString(strings.Repeat(" ", headerPad) + header)
+	b.WriteString("\n")
+	// Subtle underline for the header
+	b.WriteString("    " + lipgloss.NewStyle().Foreground(colorSeparator).Render(strings.Repeat("\u2500", 7*cellWidth))) // ─
+	b.WriteString("\n")
 
 	// Day names header with week number spacer
 	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(4).Render(""))
-	dayNames := []string{"Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"}
+	dayNames := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 	for _, d := range dayNames {
 		b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Width(cellWidth).Align(lipgloss.Center).Render(d))
 	}

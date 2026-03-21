@@ -43,6 +43,8 @@ type errMsg struct{ err error }
 type signDoneMsg struct{}
 type autoToggleMsg struct{ enabled bool }
 type syncDoneMsg struct{}
+type presetSavedMsg struct{ name string }
+type presetAppliedMsg struct{ name string }
 type clearFlashMsg struct{}
 type tickMsg time.Time
 type calendarDataMsg struct{ calendarDays []woffu.CalendarDay }
@@ -175,6 +177,14 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			d.setFlash("Auto-signing disabled", false)
 		}
 		return d, d.clearFlashAfter(3 * time.Second)
+
+	case presetSavedMsg:
+		d.setFlash(fmt.Sprintf("Preset \"%s\" saved!", msg.name), false)
+		return d, d.clearFlashAfter(3 * time.Second)
+
+	case presetAppliedMsg:
+		d.setFlash(fmt.Sprintf("Preset \"%s\" applied!", msg.name), false)
+		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
 
 	case syncDoneMsg:
 		d.setFlash("Synced to GitHub", false)
@@ -490,13 +500,23 @@ func (d *Dashboard) View() string {
 		}
 	}
 
-	// Flash message
+	// Flash message — styled as a subtle notification bar
 	if d.flash != "" {
-		icon := sFlashSuccess.Render("  ✓ ")
+		var flashLine string
 		if d.flashErr {
-			icon = sFlashError.Render("  ✗ ")
+			flashLine = lipgloss.NewStyle().
+				Foreground(colorDanger).
+				Bold(true).
+				MarginLeft(2).
+				Render("\u2717 " + d.flash) // ✗
+		} else {
+			flashLine = lipgloss.NewStyle().
+				Foreground(colorSuccess).
+				Bold(true).
+				MarginLeft(2).
+				Render("\u2713 " + d.flash) // ✓
 		}
-		sections = append(sections, "\n"+icon+d.flash)
+		sections = append(sections, "\n"+flashLine)
 	}
 
 	// Footer help
@@ -540,19 +560,40 @@ func (d *Dashboard) View() string {
 // ── Render: header ──
 
 func (d *Dashboard) renderHeader() string {
-	name := "woffux"
+	// Brand mark
+	brand := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorPrimary).
+		Background(colorHeaderBg).
+		PaddingLeft(1).
+		Render("\u25C6 woffux") // ◆ woffux
+
+	// User name
+	userName := ""
 	if d.profile != nil {
-		name = fmt.Sprintf("woffux — %s", d.profile.FullName)
+		userName = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#e9d5ff")).
+			Background(colorHeaderBg).
+			Render("  " + d.profile.FullName)
 	}
-	left := sTitle.Render(name)
+
+	// Right side: week + time
 	_, isoWeek := time.Now().ISOWeek()
-	right := sDimmed.Render(fmt.Sprintf("W%d  %s", isoWeek, time.Now().Format("15:04")))
-	gap := d.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
+	rightText := fmt.Sprintf("W%d  %s ", isoWeek, time.Now().Format("15:04"))
+	right := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#a78bfa")).
+		Background(colorHeaderBg).
+		Render(rightText)
+
+	leftContent := brand + userName
+	gap := d.width - lipgloss.Width(leftContent) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
-	return lipgloss.NewStyle().Background(colorBarBg).Width(d.width).
-		Render(left + strings.Repeat(" ", gap) + right)
+	fill := lipgloss.NewStyle().Background(colorHeaderBg).Render(strings.Repeat(" ", gap))
+
+	return lipgloss.NewStyle().Background(colorHeaderBg).Width(d.width).
+		Render(leftContent + fill + right)
 }
 
 // ── Render: tab bar ──
@@ -560,10 +601,27 @@ func (d *Dashboard) renderHeader() string {
 func (d *Dashboard) renderTabBar() string {
 	var tabs []string
 	for i, name := range tabNames {
-		tabs = append(tabs, " "+tabStyle(name, i == d.activeTab)+" ")
+		num := fmt.Sprintf("%d", i+1)
+		if i == d.activeTab {
+			// Active tab: block indicator + bold text
+			indicator := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("\u2588\u2588") // ██
+			label := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(" " + name + " ")
+			numHint := lipgloss.NewStyle().Foreground(colorDim).Render(num)
+			tabs = append(tabs, indicator+label+numHint)
+		} else {
+			// Inactive tab: dimmed with number hint
+			indicator := lipgloss.NewStyle().Foreground(colorDim).Render("\u2591\u2591") // ░░
+			label := lipgloss.NewStyle().Foreground(colorTabInact).Render(" " + name + " ")
+			numHint := lipgloss.NewStyle().Foreground(colorDim).Render(num)
+			tabs = append(tabs, indicator+label+numHint)
+		}
 	}
-	bar := strings.Join(tabs, sDimmed.Render("|"))
-	return "  " + bar
+	bar := strings.Join(tabs, "   ")
+
+	// Bottom border line
+	borderLine := lipgloss.NewStyle().Foreground(colorSeparator).Render(strings.Repeat("\u2500", d.width)) // ─
+
+	return "  " + bar + "\n" + borderLine
 }
 
 // ── Render: Status tab ──
@@ -583,7 +641,7 @@ func (d *Dashboard) renderStatusTab() string {
 	}
 	parts = append(parts, "\n  "+sSubtitle.Render(greetText))
 
-	// Compact info box: date + mode + clocked status on 2 lines
+	// Compact info box: date + mode + clocked status — with generous padding
 	if d.signInfo != nil {
 		info := d.signInfo
 
@@ -623,7 +681,7 @@ func (d *Dashboard) renderStatusTab() string {
 		bar := renderProgressBar(worked, target, 30)
 		label := "  Today's progress"
 		if clockedIn {
-			label += "  " + sLiveIndicator.Render("● live")
+			label += "  " + sLiveIndicator.Render("\u25CF live") // ●
 		}
 
 		progressLine := "  " + lipgloss.NewStyle().Foreground(barColor).Render(bar) +
@@ -637,10 +695,10 @@ func (d *Dashboard) renderStatusTab() string {
 	// Timeline (today's signs as a vertical timeline)
 	parts = append(parts, d.renderSlots())
 
-	// Next scheduled sign with type + countdown
+	// Next scheduled sign with type + countdown — visually distinct box
 	parts = append(parts, d.nextScheduledSign())
 
-	// Auto-sign status (collapsed schedule section)
+	// Schedule section: auto-sign status + today's schedule
 	parts = append(parts, d.renderAutoSign())
 
 	return strings.Join(parts, "\n")
@@ -670,7 +728,10 @@ func (d *Dashboard) renderSlots() string {
 	header := d.renderSectionLine("Timeline")
 	var rows []string
 
-	for _, s := range d.slots {
+	vertLine := lipgloss.NewStyle().Foreground(colorSeparator).Render("\u2502") // │
+
+	for i, s := range d.slots {
+		isLast := i == len(d.slots)-1
 		if s.In != "" {
 			inTime := extractTime(s.In)
 			marker := sSignIn.Render("\u25B6") // ▶
@@ -679,8 +740,8 @@ func (d *Dashboard) renderSlots() string {
 
 			// If this slot has no OUT, show a track line to "now"
 			if s.Out == "" {
-				track := sTimelineTrack.Render("  " + strings.Repeat("\u2501", 15) + " ") // ━
-				nowLabel := sNowMarker.Render("now")
+				track := sTimelineTrack.Render(" " + strings.Repeat("\u2504", 12) + " ") // ┄
+				nowLabel := sNowMarker.Render("\u25CF now") // ●
 				rows = append(rows, fmt.Sprintf("  %s %s  %s%s%s", marker, timeStr, label, track, nowLabel))
 			} else {
 				rows = append(rows, fmt.Sprintf("  %s %s  %s", marker, timeStr, label))
@@ -692,6 +753,10 @@ func (d *Dashboard) renderSlots() string {
 			label := sSignOut.Render("OUT")
 			timeStr := sValue.Render(outTime)
 			rows = append(rows, fmt.Sprintf("  %s %s  %s", marker, timeStr, label))
+		}
+		// Add vertical connector between slots (not after the last one)
+		if !isLast {
+			rows = append(rows, "  "+vertLine)
 		}
 	}
 
@@ -740,10 +805,12 @@ func (d *Dashboard) renderCalendarTab() string {
 func (d *Dashboard) renderSectionLine(title string) string {
 	prefix := "\u2500\u2500 " // ──
 	suffix := " "
-	titleRendered := sSectionHeader.Render(prefix) + sSubtitle.Render(title) + sSectionHeader.Render(suffix)
+	titleRendered := lipgloss.NewStyle().Foreground(colorSeparator).Render(prefix) +
+		lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(title) +
+		lipgloss.NewStyle().Foreground(colorSeparator).Render(suffix)
 	// Fill remaining width with ─
 	titleWidth := lipgloss.Width(titleRendered)
-	maxWidth := 40
+	maxWidth := 44
 	if d.width > 4 && d.width-4 < maxWidth {
 		maxWidth = d.width - 4
 	}
@@ -751,7 +818,7 @@ func (d *Dashboard) renderSectionLine(title string) string {
 	if remaining < 0 {
 		remaining = 0
 	}
-	return "  " + titleRendered + sSectionHeader.Render(strings.Repeat("\u2500", remaining))
+	return "  " + titleRendered + lipgloss.NewStyle().Foreground(colorSeparator).Render(strings.Repeat("\u2500", remaining))
 }
 
 // renderSchedule is no longer shown in the status tab (redundant with timeline + next sign).
@@ -787,20 +854,39 @@ func (d *Dashboard) renderAutoSign() string {
 	status := sDimmed.Render("checking...")
 	if d.autoActive != nil {
 		if *d.autoActive {
-			status = sSuccess.Render("● active")
+			status = sSuccess.Render("\u25CF active") // ●
 		} else {
-			status = sDanger.Render("○ disabled")
+			status = sDanger.Render("\u25CB disabled") // ○
 		}
 	} else if d.cfg.GithubFork == "" {
 		status = sDimmed.Render("not set up")
 	}
 
 	header := d.renderSectionLine("Schedule")
-	line := "  " + sDimmed.Render("Auto-sign") + "  " + status
+	autoLine := "  " + sDimmed.Render("Auto-sign") + "  " + status
 	if d.cfg.ActiveSchedule != "" {
-		line += "    " + sDimmed.Render("preset:") + " " + sValue.Render(d.cfg.ActiveSchedule)
+		autoLine += "    " + sDimmed.Render("preset:") + " " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(d.cfg.ActiveSchedule)
 	}
-	return "\n" + header + "\n" + line
+
+	// Show today's schedule times
+	todayLine := ""
+	sched, enabled := d.todaySchedule()
+	if enabled && len(sched.Times) > 0 {
+		dayName := time.Now().Format("Mon")
+		var times []string
+		for i, t := range sched.Times {
+			if i%2 == 0 {
+				times = append(times, sSignIn.Render("IN")+sDimmed.Render(" ")+sValue.Render(t.Time))
+			} else {
+				times = append(times, sSignOut.Render("OUT")+sDimmed.Render(" ")+sValue.Render(t.Time))
+			}
+		}
+		todayLine = "\n  " + sDimmed.Render(dayName+":") + "  " + strings.Join(times, sDimmed.Render("  \u00B7  ")) // ·
+	} else {
+		todayLine = "\n  " + sDimmed.Render("No schedule for today")
+	}
+
+	return "\n" + header + "\n" + autoLine + todayLine
 }
 
 // ── Render: footer help ──
@@ -808,25 +894,41 @@ func (d *Dashboard) renderAutoSign() string {
 func (d *Dashboard) renderHelp() string {
 	var left, right []string
 
+	footerHint := func(key, desc string) string {
+		return lipgloss.NewStyle().Foreground(colorSecondary).Bold(true).Background(colorFooterBg).Render(key) +
+			lipgloss.NewStyle().Foreground(colorMuted).Background(colorFooterBg).Render(" "+desc)
+	}
+
 	switch d.activeTab {
 	case tabStatus:
-		left = []string{hint("s", "sign"), hint("r", "refresh")}
+		left = []string{footerHint("s", "sign"), footerHint("r", "refresh")}
 	case tabEvents:
-		left = []string{hint("r", "refresh")}
+		left = []string{footerHint("r", "refresh")}
 	case tabCalendar:
-		left = []string{hint("←→↑↓", "move"), hint("space", "select"), hint("H/L", "month")}
+		left = []string{footerHint("\u2190\u2192\u2191\u2193", "move"), footerHint("space", "select"), footerHint("H/L", "month")} // ←→↑↓
 	}
 
-	right = []string{hint("enter", "menu"), hint("tab", "switch"), hint("q", "quit")}
+	right = []string{footerHint("\u23CE", "menu"), footerHint("tab", "switch"), footerHint("q", "quit")} // ⏎
 
-	leftStr := strings.Join(left, "  ")
-	rightStr := strings.Join(right, "  ")
-	gap := d.width - lipgloss.Width(leftStr) - lipgloss.Width(rightStr) - 6
-	if gap < 2 {
-		gap = 2
+	leftStr := strings.Join(left, lipgloss.NewStyle().Background(colorFooterBg).Render("  "))
+	rightStr := strings.Join(right, lipgloss.NewStyle().Background(colorFooterBg).Render("  "))
+
+	// Separator line above footer
+	sepLine := lipgloss.NewStyle().Foreground(colorSeparator).Render(strings.Repeat("\u2500", d.width)) // ─
+
+	leftPadded := lipgloss.NewStyle().Background(colorFooterBg).PaddingLeft(1).Render(leftStr)
+	rightPadded := lipgloss.NewStyle().Background(colorFooterBg).PaddingRight(1).Render(rightStr)
+
+	gap := d.width - lipgloss.Width(leftPadded) - lipgloss.Width(rightPadded)
+	if gap < 1 {
+		gap = 1
 	}
+	fill := lipgloss.NewStyle().Background(colorFooterBg).Render(strings.Repeat(" ", gap))
 
-	return "\n  " + leftStr + strings.Repeat(" ", gap) + rightStr
+	footerBar := lipgloss.NewStyle().Background(colorFooterBg).Width(d.width).
+		Render(leftPadded + fill + rightPadded)
+
+	return "\n" + sepLine + "\n" + footerBar
 }
 
 // ── Action menu ──
@@ -916,43 +1018,74 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 func (d *Dashboard) renderOverlayMenu() string {
 	actions := d.getActions()
 
+	// Title bar
+	titleBar := sOverlayTitle.Width(36).Render("\u25C6 Actions") // ◆
+
 	var rows []string
 	for i, a := range actions {
 		if a.key == "---" {
-			// Section separator
-			rows = append(rows, "\n  "+sSectionHeader.Render("── ")+sSubtitle.Render(a.name)+sSectionHeader.Render(" ──"))
+			// Section separator: full-width label with subtle background
+			sepLabel := lipgloss.NewStyle().
+				Foreground(colorAccent).
+				Bold(true).
+				Render("  " + a.name)
+			sepLine := lipgloss.NewStyle().
+				Foreground(colorSeparator).
+				Render(strings.Repeat("\u2500", 32)) // ─
+			rows = append(rows, "\n"+sepLine+"\n"+sepLabel)
 			continue
 		}
-		cursor := "  "
-		style := sDimmed
 		if i == d.menuCursor {
-			cursor = sKey.Render("▸ ")
-			style = sValue
+			// Active item: highlighted background with arrow
+			row := sMenuItemActive.Render("\u25B8 " + a.name) // ▸
+			rows = append(rows, row)
+		} else {
+			// Normal item
+			rows = append(rows, sMenuItem.Render("  "+a.name))
 		}
-		rows = append(rows, cursor+style.Render(a.name))
 	}
 
-	menuContent := strings.Join(rows, "\n") + "\n\n" +
-		sDimmed.Render("  ↑↓ navigate  enter select  esc close")
+	helpLine := "\n" + lipgloss.NewStyle().
+		Foreground(colorDim).
+		Padding(0, 2).
+		Render("\u2191\u2193 navigate  \u23CE select  esc close") // ↑↓ ⏎
+
+	menuContent := titleBar + "\n" + strings.Join(rows, "\n") + helpLine
 
 	menuBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(menuContent)
 
 	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, menuBox)
 }
 
 func (d *Dashboard) renderOverlayConfirm(title, desc, yesHint, noHint string) string {
-	content := sSection.Render("  "+title) + "\n\n" +
-		sDimmed.Render("  "+desc) + "\n\n" +
-		"  " + hint(yesHint, "confirm") + "    " + hint(noHint, "cancel")
+	// Title bar with warning color
+	titleBar := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(colorText).
+		Background(lipgloss.Color("#78350f")).
+		Padding(0, 2).
+		Width(40).
+		Render("\u26A0 " + title) // ⚠
+
+	descText := lipgloss.NewStyle().
+		Foreground(colorMuted).
+		Padding(1, 2).
+		Render(desc)
+
+	helpText := lipgloss.NewStyle().
+		Padding(0, 2).
+		Render(hint(yesHint, "confirm") + "    " + hint(noHint, "cancel"))
+
+	content := titleBar + "\n" + descText + "\n" + helpText
 
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorWarning).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(content)
 
 	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, box)
@@ -1297,27 +1430,30 @@ func (d *Dashboard) cancelSelectedRequests(targetStatus string) tea.Cmd {
 func (d *Dashboard) renderCalActionOverlay() string {
 	actions := d.getCalActions()
 
+	infos := d.cal.selectedDayInfos()
+	titleText := fmt.Sprintf("\u25C6 Action for %d days", len(infos)) // ◆
+	titleBar := sOverlayTitle.Width(40).Render(titleText)
+
 	var rows []string
 	for i, a := range actions {
-		cursor := "  "
-		style := sDimmed
 		if i == d.menuCursor {
-			cursor = sKey.Render("▸ ")
-			style = sValue
+			rows = append(rows, sMenuItemActive.Render("\u25B8 "+a.name)) // ▸
+		} else {
+			rows = append(rows, sMenuItem.Render("  "+a.name))
 		}
-		rows = append(rows, cursor+style.Render(a.name))
 	}
 
-	infos := d.cal.selectedDayInfos()
-	title := fmt.Sprintf("  Action for %d days this month", len(infos))
+	helpLine := "\n" + lipgloss.NewStyle().
+		Foreground(colorDim).
+		Padding(0, 2).
+		Render("\u2191\u2193 navigate  \u23CE submit  esc cancel")
 
-	menuContent := sSection.Render(title) + "\n\n" + strings.Join(rows, "\n") + "\n\n" +
-		sDimmed.Render("  ↑↓ navigate  enter submit  esc cancel")
+	menuContent := titleBar + "\n\n" + strings.Join(rows, "\n") + helpLine
 
 	menuBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorPrimary).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(menuContent)
 
 	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, menuBox)
@@ -1326,32 +1462,37 @@ func (d *Dashboard) renderCalActionOverlay() string {
 func (d *Dashboard) renderDayActionOverlay() string {
 	actions := d.getDayActions()
 
+	info := d.cal.dayInfo(d.cal.cursor)
+	dateLabel := info.Date
+	if t, err := time.Parse("2006-01-02", info.Date); err == nil {
+		dateLabel = t.Format("Mon 2 Jan 2006")
+	}
+	titleBar := sOverlayTitle.Width(40).Render("\u25C6 " + dateLabel) // ◆
+
 	var rows []string
 	for i, a := range actions {
-		cursor := "  "
-		style := sDimmed
-		if i == d.menuCursor {
-			cursor = sKey.Render("▸ ")
-			style = sValue
-		}
-		name := style.Render(a.name)
 		desc := ""
 		if a.desc != "" {
 			desc = "  " + sDimmed.Render(a.desc)
 		}
-		rows = append(rows, cursor+name+desc)
+		if i == d.menuCursor {
+			rows = append(rows, sMenuItemActive.Render("\u25B8 "+a.name)+desc) // ▸
+		} else {
+			rows = append(rows, sMenuItem.Render("  "+a.name)+desc)
+		}
 	}
 
-	info := d.cal.dayInfo(d.cal.cursor)
-	title := fmt.Sprintf("  %s", info.Date)
+	helpLine := "\n" + lipgloss.NewStyle().
+		Foreground(colorDim).
+		Padding(0, 2).
+		Render("\u2191\u2193 navigate  \u23CE select  esc close")
 
-	menuContent := sSection.Render(title) + "\n\n" + strings.Join(rows, "\n") + "\n\n" +
-		sDimmed.Render("  ↑↓ navigate  enter select  esc close")
+	menuContent := titleBar + "\n\n" + strings.Join(rows, "\n") + helpLine
 
 	menuBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colorSecondary).
-		Padding(1, 2).
+		Padding(1, 1).
 		Render(menuContent)
 
 	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, menuBox)
@@ -1502,7 +1643,7 @@ func (d *Dashboard) applyPreset(name string) tea.Cmd {
 		if d.cfg.GithubFork != "" {
 			gh.SyncWorkflows(d.cfg)
 		}
-		return syncDoneMsg{}
+		return presetAppliedMsg{name: name}
 	}
 }
 
@@ -1513,29 +1654,41 @@ func (d *Dashboard) savePreset(name string) tea.Cmd {
 		if err := config.Save(d.cfg); err != nil {
 			return errMsg{fmt.Errorf("save config: %w", err)}
 		}
-		return syncDoneMsg{}
+		return presetSavedMsg{name: name}
 	}
 }
 
 func (d *Dashboard) renderSavePresetOverlay() string {
-	title := sKey.Render("Save schedule as preset")
+	titleBar := sOverlayTitle.Width(36).Render("\u25C6 Save Preset") // ◆
+
 	input := d.presetInput
 	if input == "" {
 		input = sDimmed.Render("type a name...")
 	} else {
-		input = sValue.Render(input) + sKey.Render("_")
+		input = sValue.Render(input) + lipgloss.NewStyle().Foreground(colorPrimary).Bold(true).Render("\u2588") // █ cursor
 	}
-	help := sDimmed.Render("enter = save  esc = cancel")
 
-	box := fmt.Sprintf("\n  %s\n\n  > %s\n\n  %s\n", title, input, help)
+	inputBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorDim).
+		Padding(0, 2).
+		Width(32).
+		Render(input)
+
+	help := lipgloss.NewStyle().
+		Foreground(colorDim).
+		Padding(0, 1).
+		Render("\u23CE save  esc cancel")
+
+	content := titleBar + "\n\n  " + inputBox + "\n\n  " + help
 
 	return lipgloss.Place(d.width, d.height,
 		lipgloss.Center, lipgloss.Center,
 		lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63")).
-			Padding(1, 3).
-			Render(box),
+			BorderForeground(colorPrimary).
+			Padding(1, 2).
+			Render(content),
 	)
 }
 
@@ -1678,11 +1831,24 @@ func (d *Dashboard) nextScheduledSign() string {
 			}
 
 			header := d.renderSectionLine("Next")
-			line := fmt.Sprintf("  %s %s  %s", marker, sValue.Render(t.Time), typeLabel)
+
+			// Build a visually distinct next-sign indicator
+			nextContent := fmt.Sprintf("%s %s  %s", marker, sValue.Render(t.Time), typeLabel)
 			if countdown != "" {
-				line += "    " + sCountdown.Render(countdown)
+				nextContent += "    " + lipgloss.NewStyle().
+					Foreground(colorWarning).
+					Bold(true).
+					Render("\u23F1 "+countdown) // ⏱
 			}
-			return "\n" + header + "\n" + line
+
+			nextBox := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorDim).
+				Padding(0, 2).
+				MarginLeft(2).
+				Render(nextContent)
+
+			return "\n" + header + "\n" + nextBox
 		}
 	}
 	return ""
@@ -1690,17 +1856,40 @@ func (d *Dashboard) nextScheduledSign() string {
 
 func renderProgressBar(current, target time.Duration, width int) string {
 	if target <= 0 {
-		return strings.Repeat("░", width)
+		return strings.Repeat("\u2591", width) // ░
 	}
 	pct := float64(current) / float64(target)
 	if pct > 1 {
 		pct = 1
 	}
-	filled := int(pct * float64(width))
-	if filled > width {
-		filled = width
+
+	// Sub-character precision using partial block characters
+	// ░ ▏ ▎ ▍ ▌ ▋ ▊ ▉ █
+	partials := []string{" ", "\u258F", "\u258E", "\u258D", "\u258C", "\u258B", "\u258A", "\u2589", "\u2588"}
+
+	totalEighths := int(pct * float64(width) * 8)
+	fullBlocks := totalEighths / 8
+	remainder := totalEighths % 8
+
+	if fullBlocks > width {
+		fullBlocks = width
 	}
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+
+	bar := strings.Repeat("\u2588", fullBlocks) // █
+	if fullBlocks < width && remainder > 0 {
+		bar += partials[remainder]
+		remaining := width - fullBlocks - 1
+		if remaining > 0 {
+			bar += strings.Repeat("\u2591", remaining) // ░
+		}
+	} else {
+		remaining := width - fullBlocks
+		if remaining > 0 {
+			bar += strings.Repeat("\u2591", remaining) // ░
+		}
+	}
+
+	return bar
 }
 
 func formatDuration(d time.Duration) string {
