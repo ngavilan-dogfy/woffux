@@ -249,7 +249,9 @@ func CheckWorkflowSync(repo string, cfg *config.Config) (bool, error) {
 		return false, fmt.Errorf("fetch remote workflow: %w", err)
 	}
 
-	remoteContent, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+	// GitHub API returns base64 with embedded newlines every 76 chars
+	clean := strings.ReplaceAll(strings.TrimSpace(out), "\n", "")
+	remoteContent, err := base64.StdEncoding.DecodeString(clean)
 	if err != nil {
 		return false, fmt.Errorf("decode remote workflow: %w", err)
 	}
