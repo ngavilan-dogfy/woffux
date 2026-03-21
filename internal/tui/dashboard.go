@@ -179,6 +179,10 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return d, d.clearFlashAfter(3 * time.Second)
 
 	case presetSavedMsg:
+		// Reload config to pick up the new preset in the action menu
+		if newCfg, err := config.Load(); err == nil {
+			d.cfg = newCfg
+		}
 		d.setFlash(fmt.Sprintf("Preset \"%s\" saved!", msg.name), false)
 		return d, d.clearFlashAfter(3 * time.Second)
 
@@ -200,7 +204,10 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err == nil {
 			d.cfg = newCfg
 		}
-		d.setFlash("Schedule updated!", false)
+		// Offer to save as new preset
+		d.presetInput = ""
+		d.overlay = overlaySavePreset
+		d.setFlash("Schedule updated! Save as preset?", false)
 		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
 
 	case errMsg:
@@ -322,20 +329,20 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			d.overlay = overlayNone
 		case "up", "k":
 			for next := d.menuCursor - 1; next >= 0; next-- {
-				if actions[next].key != "---" {
+				if actions[next].key != "---" && actions[next].key != "preset-active" {
 					d.menuCursor = next
 					break
 				}
 			}
 		case "down", "j":
 			for next := d.menuCursor + 1; next < len(actions); next++ {
-				if actions[next].key != "---" {
+				if actions[next].key != "---" && actions[next].key != "preset-active" {
 					d.menuCursor = next
 					break
 				}
 			}
 		case "enter":
-			if actions[d.menuCursor].key != "---" {
+			if actions[d.menuCursor].key != "---" && actions[d.menuCursor].key != "preset-active" {
 				d.overlay = overlayNone
 				return d, d.executeAction(actions[d.menuCursor])
 			}
@@ -883,7 +890,12 @@ func (d *Dashboard) renderAutoSign() string {
 		}
 		todayLine = "\n  " + sDimmed.Render(dayName+":") + "  " + strings.Join(times, sDimmed.Render("  \u00B7  ")) // ·
 	} else {
-		todayLine = "\n  " + sDimmed.Render("No schedule for today")
+		wd := time.Now().Weekday()
+		if wd == time.Saturday || wd == time.Sunday {
+			todayLine = "\n  " + sDimmed.Render("Weekend")
+		} else {
+			todayLine = "\n  " + sDimmed.Render("No schedule configured")
+		}
 	}
 
 	return "\n" + header + "\n" + autoLine + todayLine
@@ -951,16 +963,17 @@ func (d *Dashboard) getActions() []action {
 
 	if d.cfg.SavedSchedules != nil && len(d.cfg.SavedSchedules) > 0 {
 		for name := range d.cfg.SavedSchedules {
-			label := name
 			if name == d.cfg.ActiveSchedule {
-				label += "  (active)"
+				// Active preset: shown but not selectable
+				actions = append(actions, action{key: "preset-active", name: "\u25CF " + name, desc: "active"})
+			} else {
+				// Inactive preset: selectable to switch
+				actions = append(actions, action{key: "preset:" + name, name: "\u25CB " + name, desc: "switch"})
 			}
-			actions = append(actions, action{key: "preset:" + name, name: label, desc: ""})
 		}
 	}
 
 	actions = append(actions,
-		action{key: "save-preset", name: "Save as preset...", desc: ""},
 		action{key: "edit-schedule", name: "Edit schedule...", desc: ""},
 	)
 
@@ -983,10 +996,6 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 		return d.toggleAuto(true)
 	case "auto-off":
 		return d.toggleAuto(false)
-	case "save-preset":
-		d.presetInput = ""
-		d.overlay = overlaySavePreset
-		return nil
 	case "edit-schedule":
 		return d.editSchedule()
 	case "sync":
@@ -1035,7 +1044,10 @@ func (d *Dashboard) renderOverlayMenu() string {
 			rows = append(rows, "\n"+sepLine+"\n"+sepLabel)
 			continue
 		}
-		if i == d.menuCursor {
+		if a.key == "preset-active" {
+			// Active preset: shown as dimmed, not selectable
+			rows = append(rows, sDimmed.Render("  "+a.name+"  "+sSuccess.Render("\u2713"))) // ✓
+		} else if i == d.menuCursor {
 			// Active item: highlighted background with arrow
 			row := sMenuItemActive.Render("\u25B8 " + a.name) // ▸
 			rows = append(rows, row)
