@@ -367,18 +367,19 @@ func (c *calendarGrid) render() string {
 	stats = append(stats, fmt.Sprintf("%d weekends", weekends))
 	b.WriteString("\n    " + sDimmed.Render(strings.Join(stats, " · ")))
 
-	// Color legend (dots)
+	// Compact legend
 	b.WriteString("\n    ")
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSuccess).Render("●") + sDimmed.Render(" office  "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorSecondary).Render("●") + sDimmed.Render(" telework  "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorDanger).Render("●") + sDimmed.Render(" holiday  "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorWarning).Render("●") + sDimmed.Render(" absence  "))
-	b.WriteString(lipgloss.NewStyle().Foreground(colorDim).Render("●") + sDimmed.Render(" weekend"))
-
-	// Request status legend
-	b.WriteString("\n    ")
-	b.WriteString(lipgloss.NewStyle().Underline(true).Foreground(colorText).Render("N") + sDimmed.Render(" approved  "))
-	b.WriteString(lipgloss.NewStyle().Italic(true).Foreground(colorText).Render("N") + sDimmed.Render(" pending"))
+	dot := func(c lipgloss.Color, label string) string {
+		return lipgloss.NewStyle().Foreground(c).Render("●") + sDimmed.Render(label)
+	}
+	b.WriteString(dot(colorSuccess, " office "))
+	b.WriteString(dot(colorSecondary, " remote "))
+	b.WriteString(dot(colorDanger, " holiday "))
+	b.WriteString(dot(colorWarning, " absence "))
+	b.WriteString(dot(colorDim, " weekend"))
+	b.WriteString("   ")
+	b.WriteString(lipgloss.NewStyle().Underline(true).Foreground(colorText).Render("N") + sDimmed.Render("=approved "))
+	b.WriteString(lipgloss.NewStyle().Italic(true).Foreground(colorText).Render("N") + sDimmed.Render("=pending"))
 
 	// Selected count
 	total := len(c.selected)

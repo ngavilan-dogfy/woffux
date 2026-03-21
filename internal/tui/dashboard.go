@@ -311,16 +311,24 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc", "q":
 			d.overlay = overlayNone
 		case "up", "k":
-			if d.menuCursor > 0 {
-				d.menuCursor--
+			for next := d.menuCursor - 1; next >= 0; next-- {
+				if actions[next].key != "---" {
+					d.menuCursor = next
+					break
+				}
 			}
 		case "down", "j":
-			if d.menuCursor < len(actions)-1 {
-				d.menuCursor++
+			for next := d.menuCursor + 1; next < len(actions); next++ {
+				if actions[next].key != "---" {
+					d.menuCursor = next
+					break
+				}
 			}
 		case "enter":
-			d.overlay = overlayNone
-			return d, d.executeAction(actions[d.menuCursor])
+			if actions[d.menuCursor].key != "---" {
+				d.overlay = overlayNone
+				return d, d.executeAction(actions[d.menuCursor])
+			}
 		}
 		return d, nil
 	}
@@ -413,9 +421,9 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		d.activeTab = tabStatus
 	case "2":
-		d.activeTab = tabEvents
-	case "3":
 		d.activeTab = tabCalendar
+	case "3":
+		d.activeTab = tabEvents
 
 	// Actions
 	case "enter":
@@ -779,91 +787,87 @@ func (d *Dashboard) renderAutoSign() string {
 	status := sDimmed.Render("checking...")
 	if d.autoActive != nil {
 		if *d.autoActive {
-			status = sSuccess.Render("active")
+			status = sSuccess.Render("● active")
 		} else {
-			status = sDanger.Render("disabled")
+			status = sDanger.Render("○ disabled")
 		}
 	} else if d.cfg.GithubFork == "" {
 		status = sDimmed.Render("not set up")
 	}
 
 	header := d.renderSectionLine("Schedule")
-	return "\n" + header + "\n  " + sDimmed.Render("Auto-sign") + "  " + status
+	line := "  " + sDimmed.Render("Auto-sign") + "  " + status
+	if d.cfg.ActiveSchedule != "" {
+		line += "    " + sDimmed.Render("preset:") + " " + sValue.Render(d.cfg.ActiveSchedule)
+	}
+	return "\n" + header + "\n" + line
 }
 
 // ── Render: footer help ──
 
 func (d *Dashboard) renderHelp() string {
-	var hints []string
+	var left, right []string
 
 	switch d.activeTab {
 	case tabStatus:
-		hints = []string{
-			hint("s", "sign"),
-			hint("a", "auto-sign"),
-			hint("r", "refresh"),
-			hint("o", "woffu"),
-			hint("g", "github"),
-		}
+		left = []string{hint("s", "sign"), hint("r", "refresh")}
 	case tabEvents:
-		hints = []string{
-			hint("r", "refresh"),
-			hint("o", "woffu"),
-		}
+		left = []string{hint("r", "refresh")}
 	case tabCalendar:
-		hints = []string{
-			hint("←→↑↓", "navigate"),
-			hint("space", "select"),
-			hint("⇧+arrows", "range"),
-			hint("H/L", "month"),
-			hint("x", "clear"),
-			hint("enter", "action"),
-		}
+		left = []string{hint("←→↑↓", "move"), hint("space", "select"), hint("H/L", "month")}
 	}
 
-	// Tab navigation + quit always shown
-	hints = append(hints,
-		hint("tab", "next"),
-		hint("1-3", "tabs"),
-		hint("enter", "menu"),
-		hint("q", "quit"),
-	)
+	right = []string{hint("enter", "menu"), hint("tab", "switch"), hint("q", "quit")}
 
-	return "\n" + sDimmed.Render("  ") + strings.Join(hints, "  ")
+	leftStr := strings.Join(left, "  ")
+	rightStr := strings.Join(right, "  ")
+	gap := d.width - lipgloss.Width(leftStr) - lipgloss.Width(rightStr) - 6
+	if gap < 2 {
+		gap = 2
+	}
+
+	return "\n  " + leftStr + strings.Repeat(" ", gap) + rightStr
 }
 
 // ── Action menu ──
 
 func (d *Dashboard) getActions() []action {
 	actions := []action{
-		{key: "sign", name: "Sign now", desc: "Clock in/out right now"},
+		{key: "sign", name: "Sign now", desc: "Clock in/out"},
 	}
 
 	if d.autoActive != nil {
 		if *d.autoActive {
-			actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: "Stop GitHub Actions from signing"})
+			actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: ""})
 		} else {
-			actions = append(actions, action{key: "auto-on", name: "Enable auto-sign", desc: "Resume GitHub Actions signing"})
+			actions = append(actions, action{key: "auto-on", name: "Enable auto-sign", desc: ""})
 		}
 	}
 
-	// Add saved schedule switching
+	// Schedule section
+	actions = append(actions, action{key: "---", name: "Schedule", desc: ""})
+
 	if d.cfg.SavedSchedules != nil && len(d.cfg.SavedSchedules) > 0 {
 		for name := range d.cfg.SavedSchedules {
-			label := fmt.Sprintf("Switch to \"%s\" schedule", name)
+			label := name
 			if name == d.cfg.ActiveSchedule {
-				label += " (current)"
+				label += "  (active)"
 			}
-			actions = append(actions, action{key: "preset:" + name, name: label, desc: "Apply saved schedule preset"})
+			actions = append(actions, action{key: "preset:" + name, name: label, desc: ""})
 		}
 	}
 
 	actions = append(actions,
-		action{key: "save-preset", name: "Save as preset", desc: "Save current schedule with a name"},
-		action{key: "edit-schedule", name: "Edit schedule", desc: "Change auto-sign times"},
-		action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"},
-		action{key: "open", name: "Open Woffu", desc: "Open Woffu in browser"},
-		action{key: "open-gh", name: "Open GitHub fork", desc: "View fork and workflow runs"},
+		action{key: "save-preset", name: "Save as preset...", desc: ""},
+		action{key: "edit-schedule", name: "Edit schedule...", desc: ""},
+	)
+
+	// Tools section
+	actions = append(actions, action{key: "---", name: "Tools", desc: ""})
+	actions = append(actions,
+		action{key: "sync", name: "Sync to GitHub", desc: ""},
+		action{key: "open", name: "Open Woffu", desc: ""},
+		action{key: "open-gh", name: "Open GitHub Actions", desc: ""},
 	)
 
 	return actions
@@ -914,18 +918,21 @@ func (d *Dashboard) renderOverlayMenu() string {
 
 	var rows []string
 	for i, a := range actions {
+		if a.key == "---" {
+			// Section separator
+			rows = append(rows, "\n  "+sSectionHeader.Render("── ")+sSubtitle.Render(a.name)+sSectionHeader.Render(" ──"))
+			continue
+		}
 		cursor := "  "
 		style := sDimmed
 		if i == d.menuCursor {
 			cursor = sKey.Render("▸ ")
 			style = sValue
 		}
-		name := style.Render(a.name)
-		desc := sDimmed.Render("  " + a.desc)
-		rows = append(rows, cursor+name+desc)
+		rows = append(rows, cursor+style.Render(a.name))
 	}
 
-	menuContent := sSection.Render("  Actions") + "\n\n" + strings.Join(rows, "\n") + "\n\n" +
+	menuContent := strings.Join(rows, "\n") + "\n\n" +
 		sDimmed.Render("  ↑↓ navigate  enter select  esc close")
 
 	menuBox := lipgloss.NewStyle().
