@@ -60,6 +60,9 @@ func ForkAndSetup(cfg *config.Config, password string) (string, error) {
 		}
 	}
 
+	// Force GitHub to register cron triggers
+	_ = ReloadAutoSign(forkName)
+
 	return forkName, nil
 }
 
