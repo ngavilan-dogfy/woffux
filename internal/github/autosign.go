@@ -92,6 +92,16 @@ func EnableAutoSign(repo string) error {
 	return nil
 }
 
+// ReloadAutoSign forces GitHub to re-register cron triggers by disabling
+// and re-enabling the Auto Sign workflow. This is needed after updating
+// the workflow file, as GitHub may not pick up new cron schedules otherwise.
+func ReloadAutoSign(repo string) error {
+	if err := DisableAutoSign(repo); err != nil {
+		return fmt.Errorf("disable for reload: %w", err)
+	}
+	return EnableAutoSign(repo)
+}
+
 // DisableAutoSign disables all sign workflows on the fork.
 func DisableAutoSign(repo string) error {
 	token, err := tokenForRepo(repo)

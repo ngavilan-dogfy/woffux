@@ -1192,6 +1192,12 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 		if err := gh.SyncWorkflows(d.cfg); err != nil {
 			return errMsg{fmt.Errorf("sync workflows: %w", err)}
 		}
+		// Force GitHub to reload cron triggers
+		if d.cfg.GithubFork != "" {
+			if err := gh.ReloadAutoSign(d.cfg.GithubFork); err != nil {
+				return errMsg{fmt.Errorf("reload auto-sign: %w", err)}
+			}
+		}
 		return syncDoneMsg{}
 	}
 }
@@ -1586,9 +1592,14 @@ func (d *Dashboard) applyPreset(name string) tea.Cmd {
 		if err := config.Save(d.cfg); err != nil {
 			return errMsg{fmt.Errorf("save config: %w", err)}
 		}
-		// Sync workflows if github is configured
+		// Sync workflows + reload crons on GitHub
 		if d.cfg.GithubFork != "" {
-			gh.SyncWorkflows(d.cfg)
+			if err := gh.SyncWorkflows(d.cfg); err != nil {
+				return errMsg{fmt.Errorf("sync workflows: %w", err)}
+			}
+			if err := gh.ReloadAutoSign(d.cfg.GithubFork); err != nil {
+				return errMsg{fmt.Errorf("reload auto-sign: %w", err)}
+			}
 		}
 		return presetAppliedMsg{name: name}
 	}

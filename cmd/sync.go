@@ -96,9 +96,25 @@ This command makes GitHub match it.`,
 				lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(fmt.Sprintf("%d days, %d signs/day, tz=%s", days, signs/days, cfg.Timezone)))
 		}
 
+		// Step 3: Reload cron triggers (disable + re-enable workflow)
+		var reloadErr error
+		if workflowsErr == nil {
+			spinner.New().
+				Title("Reloading cron triggers...").
+				Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
+				Run()
+
+			if reloadErr != nil {
+				fmt.Printf("  %s %s%s\n", sErrIcon.Render("✗"), sLabel.Render("Cron reload"), reloadErr)
+			} else {
+				fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Cron reload"),
+					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("triggers refreshed"))
+			}
+		}
+
 		// Summary
 		fmt.Println()
-		if secretsErr == nil && workflowsErr == nil {
+		if secretsErr == nil && workflowsErr == nil && reloadErr == nil {
 			fmt.Printf("  %s GitHub is up to date. Auto-signing will use these settings.\n\n", sOkIcon.Render("✓"))
 		} else {
 			fmt.Printf("  %s Some items failed. Run %s to retry.\n\n",

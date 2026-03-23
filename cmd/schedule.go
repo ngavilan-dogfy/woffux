@@ -75,6 +75,17 @@ var scheduleEditCmd = &cobra.Command{
 				fmt.Printf("  %s Push failed: %s\n", sWarn, pushErr)
 			} else {
 				fmt.Printf("  %s Workflows updated!\n", sOk)
+				// Reload cron triggers
+				var reloadErr error
+				spinner.New().
+					Title("Reloading cron triggers...").
+					Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
+					Run()
+				if reloadErr != nil {
+					fmt.Printf("  %s Cron reload failed: %s\n", sWarn, reloadErr)
+				} else {
+					fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
+				}
 			}
 		}
 
@@ -197,6 +208,17 @@ var scheduleLoadCmd = &cobra.Command{
 				fmt.Printf("  %s Push failed: %s\n", sWarn, pushErr)
 			} else {
 				fmt.Printf("  %s Workflows updated!\n", sOk)
+				// Reload cron triggers
+				var reloadErr error
+				spinner.New().
+					Title("Reloading cron triggers...").
+					Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
+					Run()
+				if reloadErr != nil {
+					fmt.Printf("  %s Cron reload failed: %s\n", sWarn, reloadErr)
+				} else {
+					fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
+				}
 			}
 		}
 
