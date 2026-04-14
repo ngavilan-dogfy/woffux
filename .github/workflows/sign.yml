@@ -34,7 +34,7 @@ jobs:
           if [ "$LOCAL_HOUR" -lt 0 ]; then LOCAL_HOUR=$(( LOCAL_HOUR + 24 )); fi
           if [ "$LOCAL_HOUR" -ge 24 ]; then LOCAL_HOUR=$(( LOCAL_HOUR - 24 )); fi
           LOCAL_TIME=$(printf "%02d:%02d" "$LOCAL_HOUR" "$CRON_MIN")
-          SIGN_TIMES="17:30 08:00 15:00 08:30 13:30 14:15"
+          SIGN_TIMES="13:30 14:15 17:30 08:00 15:00 08:30"
           MATCH=false
           for t in $SIGN_TIMES; do
             if [ "$LOCAL_TIME" = "$t" ]; then MATCH=true; break; fi
