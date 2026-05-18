@@ -196,6 +196,12 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 	if err := runCmd(tmpDir, "git", "clone", "--depth=1", cloneURL, tmpDir); err != nil {
 		return fmt.Errorf("clone fork: %w", err)
 	}
+	if err := runCmd(tmpDir, "git", "config", "user.name", "woffux"); err != nil {
+		return fmt.Errorf("configure git user.name: %w", err)
+	}
+	if err := runCmd(tmpDir, "git", "config", "user.email", "woffux@users.noreply.github.com"); err != nil {
+		return fmt.Errorf("configure git user.email: %w", err)
+	}
 
 	// Create .github/workflows directory
 	workflowDir := filepath.Join(tmpDir, ".github", "workflows")
@@ -228,8 +234,12 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 	}
 
 	// Commit and push
-	_ = runCmd(tmpDir, "git", "add", ".github/workflows/")
-	_ = runCmd(tmpDir, "git", "commit", "-m", "chore: update auto-sign workflows from woffux")
+	if err := runCmd(tmpDir, "git", "add", ".github/workflows/"); err != nil {
+		return fmt.Errorf("stage workflows: %w", err)
+	}
+	if err := runCmd(tmpDir, "git", "commit", "-m", "chore: update auto-sign workflows from woffux"); err != nil {
+		return fmt.Errorf("commit workflows: %w", err)
+	}
 	if err := runCmd(tmpDir, "git", "push"); err != nil {
 		return fmt.Errorf("push workflows: %w", err)
 	}

@@ -28,6 +28,13 @@ Examples:
   woffux requests --json | jq '.[] | select(.status == "approved")'
   woffux requests --plain | grep Vacaciones`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if requestsPage < 1 {
+			return fmt.Errorf("--page must be 1 or greater")
+		}
+		if requestsSize < 1 {
+			return fmt.Errorf("--size must be 1 or greater")
+		}
+
 		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
 			return err

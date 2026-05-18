@@ -27,6 +27,10 @@ Examples:
   woffux calendar -m 4             April
   woffux calendar --json | jq '.[] | select(.is_holiday)'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if calendarMonth < 0 || calendarMonth > 12 {
+			return fmt.Errorf("--month must be between 1 and 12")
+		}
+
 		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
 			return err

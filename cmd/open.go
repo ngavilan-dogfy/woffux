@@ -53,12 +53,11 @@ Examples:
 		}
 
 		fmt.Printf("  Opening %s\n", url)
-		openBrowser(url)
-		return nil
+		return openBrowser(url)
 	},
 }
 
-func openBrowser(url string) {
+func openBrowser(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -68,7 +67,8 @@ func openBrowser(url string) {
 	case "windows":
 		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
 	}
-	if cmd != nil {
-		cmd.Start()
+	if cmd == nil {
+		return fmt.Errorf("unsupported OS: %s", runtime.GOOS)
 	}
+	return cmd.Start()
 }

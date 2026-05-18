@@ -29,20 +29,20 @@ func standardSchedule() config.Schedule {
 func TestGenerateCrons_DSTZone(t *testing.T) {
 	crons := GenerateCrons(standardSchedule(), "Europe/Madrid")
 
-	// Each DST sign time produces 2 entries (one per offset).
-	// 4 Mon-Thu times × 2 + 2 Friday times × 2 = 12 entries
+	// 6 local sign times x 2 UTC offsets = 12 entries
 	if len(crons) != 12 {
 		t.Fatalf("expected 12 cron entries, got %d", len(crons))
 	}
 
-	// No entry should have comma-separated hours (each is a single UTC hour)
 	for _, c := range crons {
 		parts := strings.Fields(c.Cron)
-		if strings.Contains(parts[1], ",") {
-			t.Errorf("DST cron should NOT have comma-separated hours (split into separate entries): %s", c.Cron)
+		if len(parts) != 5 {
+			t.Fatalf("invalid cron shape: %s", c.Cron)
 		}
-		// Should NOT contain month ranges
-		if len(parts) == 5 && parts[3] != "*" {
+		if strings.Contains(parts[1], ",") {
+			t.Errorf("DST cron should use separate single-hour entries, got: %s", c.Cron)
+		}
+		if parts[3] != "*" {
 			t.Errorf("cron should have * for month field, got: %s", parts[3])
 		}
 	}
@@ -89,14 +89,16 @@ func TestGenerateCrons_EST(t *testing.T) {
 	}
 	crons := GenerateCrons(schedule, "America/New_York")
 
-	// EST = UTC-5, EDT = UTC-4. 09:00 → UTC 14 (EST) or 13 (EDT) → 2 entries
+	// EST = UTC-5, EDT = UTC-4. 09:00 -> UTC 14 (EST) or 13 (EDT).
 	if len(crons) != 2 {
-		t.Fatalf("expected 2 cron entries, got %d", len(crons))
+		t.Fatalf("expected 2 offset-specific cron entries, got %d", len(crons))
 	}
-
-	hours := crons[0].Cron + " " + crons[1].Cron
-	if !strings.Contains(hours, " 13 ") || !strings.Contains(hours, " 14 ") {
-		t.Errorf("expected hours 13 and 14 for 09:00 EST/EDT, got: %s / %s", crons[0].Cron, crons[1].Cron)
+	got := map[string]bool{}
+	for _, c := range crons {
+		got[c.Cron] = true
+	}
+	if !got["0 13 * * 1"] || !got["0 14 * * 1"] {
+		t.Errorf("expected hours 13 and 14 for 09:00 EST/EDT, got: %v", got)
 	}
 }
 
@@ -109,14 +111,34 @@ func TestGenerateCrons_SouthernHemisphere(t *testing.T) {
 	}
 	crons := GenerateCrons(schedule, "Australia/Sydney")
 
-	// AEST=UTC+10, AEDT=UTC+11. 08:00 → UTC 22 (prev day, AEST) or 21 (AEDT) → 2 entries
+	// AEST=UTC+10, AEDT=UTC+11. Monday 08:00 -> Sunday 22:00/21:00 UTC.
 	if len(crons) != 2 {
-		t.Fatalf("expected 2 cron entries, got %d", len(crons))
+		t.Fatalf("expected 2 offset-specific cron entries, got %d", len(crons))
 	}
+	got := map[string]bool{}
+	for _, c := range crons {
+		got[c.Cron] = true
+	}
+	if !got["0 21 * * 0"] || !got["0 22 * * 0"] {
+		t.Errorf("expected Sunday UTC hours 21 and 22 for Monday 08:00 Sydney, got: %v", got)
+	}
+}
 
-	hours := crons[0].Cron + " " + crons[1].Cron
-	if !strings.Contains(hours, " 21 ") || !strings.Contains(hours, " 22 ") {
-		t.Errorf("expected hours 21 and 22 for 08:00 AEST/AEDT, got: %s / %s", crons[0].Cron, crons[1].Cron)
+func TestGenerateCrons_PreviousUTCDay(t *testing.T) {
+	schedule := config.Schedule{
+		Monday: config.DaySchedule{
+			Enabled: true,
+			Times:   []config.ScheduleEntry{{Time: "00:30"}},
+		},
+	}
+	crons := GenerateCrons(schedule, "Europe/Madrid")
+
+	got := map[string]bool{}
+	for _, c := range crons {
+		got[c.Cron] = true
+	}
+	if !got["30 22 * * 0"] || !got["30 23 * * 0"] {
+		t.Errorf("expected Monday 00:30 Madrid to run on Sunday UTC, got: %v", got)
 	}
 }
 
@@ -176,20 +198,21 @@ func TestSignTimes(t *testing.T) {
 
 func TestLocalToUTC(t *testing.T) {
 	tests := []struct {
-		hour, offset, want int
+		hour, offset, wantHour, wantDayDelta int
 	}{
-		{8, 1, 7},    // CET
-		{8, 2, 6},    // CEST
-		{8, -5, 13},  // EST
-		{0, 1, 23},   // midnight CET → 23 UTC
-		{23, -1, 0},  // 23:00 UTC-1 → 00 UTC
-		{8, 10, 22},  // AEST → previous day UTC
+		{8, 1, 7, 0},    // CET
+		{8, 2, 6, 0},    // CEST
+		{8, -5, 13, 0},  // EST
+		{0, 1, 23, -1},  // midnight CET -> previous UTC day
+		{23, -1, 0, 1},  // 23:00 UTC-1 -> next UTC day
+		{8, 10, 22, -1}, // AEST -> previous UTC day
 	}
 
 	for _, tt := range tests {
-		got := localToUTC(tt.hour, tt.offset)
-		if got != tt.want {
-			t.Errorf("localToUTC(%d, %d) = %d, want %d", tt.hour, tt.offset, got, tt.want)
+		gotHour, gotDayDelta := localToUTC(tt.hour, tt.offset)
+		if gotHour != tt.wantHour || gotDayDelta != tt.wantDayDelta {
+			t.Errorf("localToUTC(%d, %d) = (%d, %d), want (%d, %d)",
+				tt.hour, tt.offset, gotHour, gotDayDelta, tt.wantHour, tt.wantDayDelta)
 		}
 	}
 }
@@ -217,6 +240,20 @@ func TestGenerateWorkflowYAML_ContainsGuard(t *testing.T) {
 	}
 	if !strings.Contains(yaml, `printf "%02d:%02d"`) {
 		t.Error("guard should format HH:MM with printf")
+	}
+	if strings.Contains(yaml, ",7 * *") {
+		t.Error("DST workflow should not generate comma-separated UTC hours")
+	}
+}
+
+func TestGenerateWorkflowYAML_EmptyScheduleHasNoCronSchedule(t *testing.T) {
+	yaml := GenerateWorkflowYAML(config.Schedule{}, "UTC")
+
+	if strings.Contains(yaml, "  schedule:") {
+		t.Error("empty schedule should not include an automatic cron trigger")
+	}
+	if !strings.Contains(yaml, "  workflow_dispatch:") {
+		t.Error("empty schedule should keep a manual dispatch trigger")
 	}
 }
 
@@ -260,24 +297,24 @@ func TestGenerateWorkflowYAML_ContainsExpectedGuard(t *testing.T) {
 }
 
 func TestGenerateCrons_ActionField(t *testing.T) {
-	crons := GenerateCrons(standardSchedule(), "CET")
+	crons := GenerateCrons(standardSchedule(), "UTC")
 
-	// Each DST sign time produces 2 entries with the same action.
-	// Fri: 08:00=in×2, 15:00=out×2. Mon-Thu: 08:30=in×2, 13:30=out×2, 14:15=in×2, 17:30=out×2.
-	// Sorted by cron key: Fri first, then Mon-Thu.
-	expectedActions := []string{
-		"in", "in", "out", "out",     // Fri 08:00, 15:00
-		"in", "in", "out", "out",     // Mon-Thu 08:30, 13:30
-		"in", "in", "out", "out",     // Mon-Thu 14:15, 17:30
+	want := map[string]string{
+		"Mon-Tue-Wed-Thu 08:30 (UTC+0)": "in",
+		"Mon-Tue-Wed-Thu 13:30 (UTC+0)": "out",
+		"Mon-Tue-Wed-Thu 14:15 (UTC+0)": "in",
+		"Mon-Tue-Wed-Thu 17:30 (UTC+0)": "out",
+		"Fri 08:00 (UTC+0)":             "in",
+		"Fri 15:00 (UTC+0)":             "out",
 	}
 
-	if len(crons) != len(expectedActions) {
-		t.Fatalf("expected %d entries, got %d", len(expectedActions), len(crons))
+	got := make(map[string]string, len(crons))
+	for _, c := range crons {
+		got[c.Comment] = c.Action
 	}
-
-	for i, c := range crons {
-		if c.Action != expectedActions[i] {
-			t.Errorf("entry %d (%s): action = %q, want %q", i, c.Comment, c.Action, expectedActions[i])
+	for comment, action := range want {
+		if got[comment] != action {
+			t.Errorf("%s action = %q, want %q", comment, got[comment], action)
 		}
 	}
 }

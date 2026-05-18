@@ -75,7 +75,7 @@ func EnableAutoSign(repo string) error {
 
 	changed := 0
 	for _, w := range workflows {
-		if strings.Contains(w.Name, "Sign") || strings.Contains(w.Name, "Keepalive") {
+		if isAutoManagedWorkflow(w.Name) {
 			err := ghRunWithToken(token, "api", "-X", "PUT",
 				fmt.Sprintf("repos/%s/actions/workflows/%d/enable", repo, w.ID))
 			if err != nil {
@@ -139,7 +139,7 @@ func DisableAutoSign(repo string) error {
 
 	changed := 0
 	for _, w := range workflows {
-		if strings.Contains(w.Name, "Sign") || strings.Contains(w.Name, "Keepalive") {
+		if isAutoManagedWorkflow(w.Name) {
 			err := ghRunWithToken(token, "api", "-X", "PUT",
 				fmt.Sprintf("repos/%s/actions/workflows/%d/disable", repo, w.ID))
 			if err != nil {
@@ -154,4 +154,8 @@ func DisableAutoSign(repo string) error {
 	}
 
 	return nil
+}
+
+func isAutoManagedWorkflow(name string) bool {
+	return strings.Contains(name, "Auto Sign") || strings.Contains(name, "Keepalive")
 }

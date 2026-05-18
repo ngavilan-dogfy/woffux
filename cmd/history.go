@@ -26,9 +26,13 @@ var historyCmd = &cobra.Command{
 Examples:
   woffux history                  Last 7 days
   woffux history -d 30            Last 30 days
-  woffux history --from 2026-03-01
+ woffux history --from 2026-03-01
   woffux history --json | jq '.[].date'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if historyDays < 0 {
+			return fmt.Errorf("--days must be 0 or greater")
+		}
+
 		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
 			return err
@@ -58,6 +62,9 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("invalid --to date (use YYYY-MM-DD): %w", err)
 			}
+		}
+		if from.After(to) {
+			return fmt.Errorf("--from must be on or before --to")
 		}
 
 		signs, err := woffu.GetSignHistory(companyClient, token, from, to)

@@ -24,13 +24,13 @@ import (
 )
 
 var (
-	sTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).MarginBottom(1)
-	sOk      = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).SetString("✓")
-	sInfo    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).SetString("→")
-	sWarn    = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).SetString("!")
-	sCoord   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	sDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	sBold    = lipgloss.NewStyle().Bold(true)
+	sTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).MarginBottom(1)
+	sOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).SetString("✓")
+	sInfo  = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).SetString("→")
+	sWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).SetString("!")
+	sCoord = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	sDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	sBold  = lipgloss.NewStyle().Bold(true)
 )
 
 var errNoSelection = fmt.Errorf("no selection")
@@ -43,11 +43,6 @@ var setupCmd = &cobra.Command{
 
 func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Println(sTitle.Render("woffux setup"))
-
-	// Check gh is installed
-	if err := checkGhInstalled(); err != nil {
-		return err
-	}
 
 	// Load existing config for pre-filling (if any)
 	existing, _ := config.Load()
@@ -94,7 +89,11 @@ func runSetup(cmd *cobra.Command, args []string) error {
 			officeLat, officeLon = lat, lon
 		} else {
 			// Fallback: Google Maps or manual
-			lat, lon, err := locationPickerWithMap("Office location", 0, 0)
+			defaultLat, defaultLon := 0.0, 0.0
+			if existing != nil && coordsConfigured(existing.Latitude, existing.Longitude) {
+				defaultLat, defaultLon = existing.Latitude, existing.Longitude
+			}
+			lat, lon, err := locationPickerWithMap("Office location", defaultLat, defaultLon)
 			if err != nil {
 				return err
 			}
@@ -106,14 +105,18 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	// ── Step 4: Home location ──────────────────────────────────────
 
-	homeLat, homeLon, err := locationPickerWithMap("Home location", officeLat, officeLon)
+	defaultHomeLat, defaultHomeLon := 0.0, 0.0
+	if existing != nil && coordsConfigured(existing.HomeLatitude, existing.HomeLongitude) {
+		defaultHomeLat, defaultHomeLon = existing.HomeLatitude, existing.HomeLongitude
+	}
+	homeLat, homeLon, err := locationPickerWithMap("Home location", defaultHomeLat, defaultHomeLon)
 	if err != nil {
 		return err
 	}
 
 	// ── Step 5: Schedule ───────────────────────────────────────────
 
-	schedule, tz, err := scheduleWizard()
+	scheduleResult, err := scheduleWizard()
 	if err != nil {
 		return err
 	}
@@ -135,9 +138,16 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		Longitude:       officeLon,
 		HomeLatitude:    homeLat,
 		HomeLongitude:   homeLon,
-		Timezone:        tz,
-		Schedule:        schedule,
 		Telegram:        telegramCfg,
+	}
+	if existing != nil {
+		cfg.GithubFork = existing.GithubFork
+		cfg.SavedSchedules = config.CloneSchedulePresets(existing.SavedSchedules)
+		cfg.ActiveSchedule = existing.ActiveSchedule
+		cfg.RandomDelaySecs = existing.RandomDelaySecs
+	}
+	if err := applyScheduleWizardResult(cfg, scheduleResult); err != nil {
+		return err
 	}
 
 	var saveErr, keyErr error
@@ -157,40 +167,88 @@ func runSetup(cmd *cobra.Command, args []string) error {
 		fmt.Printf("     You may need to enter it again next time.\n\n")
 	} else {
 		fmt.Printf("  %s Config saved\n", sOk)
+		if msg := scheduleWizardSavedPresetMessage(scheduleResult); msg != "" {
+			fmt.Print(msg)
+		}
 		fmt.Printf("  %s Password in keychain\n\n", sOk)
 	}
 
 	// ── Step 8: GitHub ─────────────────────────────────────────────
 
-	var wantGitHub bool
-	huh.NewForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Set up GitHub Actions?").
-				Description("Fork, configure secrets, enable auto-signing").
-				Affirmative("Yes").
-				Negative("Skip").
-				Value(&wantGitHub),
-		),
-	).Run()
+	if cfg.GithubFork != "" {
+		var syncGitHub bool
+		if err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Sync existing GitHub Actions?").
+					Description(fmt.Sprintf("Update secrets and workflows on %s", cfg.GithubFork)).
+					Affirmative("Sync now").
+					Negative("Skip").
+					Value(&syncGitHub),
+			),
+		).Run(); err != nil {
+			return err
+		}
 
-	if wantGitHub {
-		var forkName string
-		var ghErr error
-		spinner.New().
-			Title("Setting up GitHub...").
-			Action(func() {
-				forkName, ghErr = gh.ForkAndSetup(cfg, password)
-			}).
-			Run()
+		if syncGitHub {
+			if err := checkGhInstalled(); err != nil {
+				return err
+			}
 
-		if ghErr != nil {
-			fmt.Printf("  %s GitHub setup failed: %s\n", sWarn, ghErr)
+			var ghErr error
+			spinner.New().
+				Title("Syncing GitHub Actions...").
+				Action(func() { ghErr = syncGitHubConfig(cfg, password) }).
+				Run()
+
+			if ghErr != nil {
+				fmt.Printf("  %s GitHub sync failed: %s\n", sWarn, ghErr)
+			} else {
+				fmt.Printf("  %s GitHub synced — auto-signing will use the new settings\n", sOk)
+			}
 		} else {
-			cfg.GithubFork = forkName
-			config.Save(cfg)
-			fmt.Printf("  %s Fork: %s\n", sOk, forkName)
-			fmt.Printf("  %s Secrets + workflows configured\n", sOk)
+			fmt.Printf("\n  %s GitHub auto-signing will keep using the previous settings until you run %s.\n\n",
+				sWarn, sBold.Render("woffux sync"))
+		}
+	} else {
+		var wantGitHub bool
+		if err := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Set up GitHub Actions?").
+					Description("Fork, configure secrets, enable auto-signing").
+					Affirmative("Yes").
+					Negative("Skip").
+					Value(&wantGitHub),
+			),
+		).Run(); err != nil {
+			return err
+		}
+
+		if wantGitHub {
+			if err := checkGhInstalled(); err != nil {
+				return err
+			}
+
+			var forkName string
+			var ghErr error
+			spinner.New().
+				Title("Setting up GitHub...").
+				Action(func() {
+					forkName, ghErr = gh.ForkAndSetup(cfg, password)
+				}).
+				Run()
+
+			if ghErr != nil {
+				fmt.Printf("  %s GitHub setup failed: %s\n", sWarn, ghErr)
+			} else {
+				cfg.GithubFork = forkName
+				if err := config.Save(cfg); err != nil {
+					return fmt.Errorf("save github fork: %w", err)
+				}
+				fmt.Printf("  %s Fork: %s\n", sOk, forkName)
+				fmt.Printf("  %s Secrets + workflows configured\n", sOk)
+			}
 		}
 	}
 
@@ -198,7 +256,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 
 	if claudeCodeDetected() {
 		var installSkill bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Install Claude Code skill?").
@@ -207,7 +265,9 @@ func runSetup(cmd *cobra.Command, args []string) error {
 					Negative("Skip").
 					Value(&installSkill),
 			),
-		).Run()
+		).Run(); err != nil {
+			return err
+		}
 
 		if installSkill {
 			if err := installClaudeSkill(); err != nil {
@@ -226,7 +286,7 @@ func runSetup(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  %s Office: %.4f, %.4f\n", sInfo, officeLat, officeLon)
 	fmt.Printf("  %s Home:   %.4f, %.4f\n", sInfo, homeLat, homeLon)
 	fmt.Println()
-	printSetupSchedule(schedule)
+	printSetupSchedule(cfg.Schedule)
 	fmt.Println()
 	fmt.Printf("  Run %s to open the dashboard.\n\n", sBold.Render("woffux"))
 
@@ -237,7 +297,7 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 	if len(results) == 1 {
 		r := results[0]
 		var confirm bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Is this your %s?", strings.ToLower(title))).
@@ -246,7 +306,9 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 					Negative("Search manually").
 					Value(&confirm),
 			),
-		).Run()
+		).Run(); err != nil {
+			return 0, 0, err
+		}
 
 		if confirm {
 			fmt.Printf("  %s %s\n\n", sOk, sCoord.Render(fmt.Sprintf("%.4f, %.4f", r.Lat, r.Lon)))
@@ -265,14 +327,16 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 	options = append(options, huh.NewOption(sDim.Render("None — search manually"), -1))
 
 	var choice int
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[int]().
 				Title(title).
 				Options(options...).
 				Value(&choice),
 		),
-	).Run()
+	).Run(); err != nil {
+		return 0, 0, err
+	}
 
 	if choice == -1 {
 		return 0, 0, errNoSelection
@@ -286,14 +350,20 @@ func pickFromResults(results []geocode.Result, title string) (float64, float64, 
 func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float64, float64, error) {
 	for {
 		var method string
+		options := []huh.Option[string]{
+			huh.NewOption("Paste a Google Maps URL", "gmaps"),
+			huh.NewOption("Enter coordinates manually", "manual"),
+		}
+		if coordsConfigured(defaultLat, defaultLon) {
+			options = append([]huh.Option[string]{
+				huh.NewOption(fmt.Sprintf("Keep current coordinates (%.4f, %.4f)", defaultLat, defaultLon), "current"),
+			}, options...)
+		}
 		err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title(title).
-					Options(
-						huh.NewOption("Paste a Google Maps URL", "gmaps"),
-						huh.NewOption("Enter coordinates manually", "manual"),
-					).
+					Options(options...).
 					Value(&method),
 			),
 		).Run()
@@ -302,6 +372,8 @@ func locationPickerWithMap(title string, defaultLat, defaultLon float64) (float6
 		}
 
 		switch method {
+		case "current":
+			return defaultLat, defaultLon, nil
 		case "gmaps":
 			lat, lon, err := googleMapsURLPicker(title)
 			if err == nil {
@@ -326,7 +398,7 @@ func googleMapsURLPicker(title string) (float64, float64, error) {
 	fmt.Println()
 
 	var openGmaps bool
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Open Google Maps?").
@@ -334,7 +406,9 @@ func googleMapsURLPicker(title string) (float64, float64, error) {
 				Negative("I have the URL").
 				Value(&openGmaps),
 		),
-	).Run()
+	).Run(); err != nil {
+		return 0, 0, err
+	}
 
 	if openGmaps {
 		openURL("https://www.google.com/maps")
@@ -376,8 +450,12 @@ func manualCoordsPicker(title string) (float64, float64, error) {
 				Placeholder("41.353186").
 				Value(&latStr).
 				Validate(func(s string) error {
-					if _, err := strconv.ParseFloat(s, 64); err != nil {
+					lat, err := strconv.ParseFloat(s, 64)
+					if err != nil {
 						return fmt.Errorf("enter a valid number")
+					}
+					if lat < -90 || lat > 90 {
+						return fmt.Errorf("latitude must be between -90 and 90")
 					}
 					return nil
 				}),
@@ -386,8 +464,12 @@ func manualCoordsPicker(title string) (float64, float64, error) {
 				Placeholder("2.144802").
 				Value(&lonStr).
 				Validate(func(s string) error {
-					if _, err := strconv.ParseFloat(s, 64); err != nil {
+					lon, err := strconv.ParseFloat(s, 64)
+					if err != nil {
 						return fmt.Errorf("enter a valid number")
+					}
+					if lon < -180 || lon > 180 {
+						return fmt.Errorf("longitude must be between -180 and 180")
 					}
 					return nil
 				}),
@@ -404,7 +486,35 @@ func manualCoordsPicker(title string) (float64, float64, error) {
 	return lat, lon, nil
 }
 
-func scheduleWizard() (config.Schedule, string, error) {
+func coordsConfigured(lat, lon float64) bool {
+	return lat != 0 || lon != 0
+}
+
+type scheduleWizardResult struct {
+	Schedule       config.Schedule
+	Timezone       string
+	ActiveSchedule string
+	SavedPreset    string
+}
+
+func applyScheduleWizardResult(cfg *config.Config, result scheduleWizardResult) error {
+	cfg.Schedule = result.Schedule
+	if result.Timezone != "" {
+		cfg.Timezone = result.Timezone
+	}
+	if result.SavedPreset != "" {
+		if err := cfg.SaveSchedulePreset(result.SavedPreset, result.Schedule); err != nil {
+			return err
+		}
+		cfg.ActiveSchedule = config.NormalizePresetName(result.SavedPreset)
+		return nil
+	}
+	cfg.ActiveSchedule = config.NormalizePresetName(result.ActiveSchedule)
+	cfg.Normalize()
+	return nil
+}
+
+func scheduleWizard() (scheduleWizardResult, error) {
 	sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
 	sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 
@@ -412,6 +522,9 @@ func scheduleWizard() (config.Schedule, string, error) {
 
 	// Load existing presets
 	existing, _ := config.Load()
+	if existing != nil && existing.Timezone != "" {
+		zone = existing.Timezone
+	}
 
 	var mode string
 	presetOptions := []huh.Option[string]{
@@ -435,7 +548,7 @@ func scheduleWizard() (config.Schedule, string, error) {
 
 	// Add saved presets
 	if existing != nil {
-		for name := range existing.SavedSchedules {
+		for _, name := range existing.SchedulePresetNames() {
 			presetOptions = append(presetOptions,
 				huh.NewOption(fmt.Sprintf("Saved: %s", sBold.Render(name)), "saved:"+name))
 		}
@@ -453,10 +566,11 @@ func scheduleWizard() (config.Schedule, string, error) {
 		),
 	).Run()
 	if err != nil {
-		return config.Schedule{}, "", err
+		return scheduleWizardResult{}, err
 	}
 
 	var schedule config.Schedule
+	var activeSchedule string
 
 	switch {
 	case mode == "standard":
@@ -473,15 +587,19 @@ func scheduleWizard() (config.Schedule, string, error) {
 			dayWith("08:00", "15:00"))
 	case strings.HasPrefix(mode, "saved:"):
 		name := strings.TrimPrefix(mode, "saved:")
-		if existing != nil {
-			if s, ok := existing.SavedSchedules[name]; ok {
-				schedule = s
-			}
+		if existing == nil {
+			return scheduleWizardResult{}, fmt.Errorf("preset \"%s\" not found", name)
 		}
+		s, ok := existing.SavedSchedules[name]
+		if !ok {
+			return scheduleWizardResult{}, fmt.Errorf("preset \"%s\" not found", name)
+		}
+		schedule = s
+		activeSchedule = name
 	case mode == "custom":
 		schedule, err = customScheduleWizard(sIn, sOut)
 		if err != nil {
-			return config.Schedule{}, "", err
+			return scheduleWizardResult{}, err
 		}
 	}
 
@@ -492,23 +610,35 @@ func scheduleWizard() (config.Schedule, string, error) {
 
 	// Offer to save as preset
 	var saveName string
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Save as preset? (name or Enter to skip)").
 				Placeholder("summer").
 				Value(&saveName),
 		),
-	).Run()
-
-	if saveName != "" && existing != nil {
-		existing.SaveSchedulePreset(saveName, schedule)
-		existing.ActiveSchedule = saveName
-		config.Save(existing)
-		fmt.Printf("  %s Saved as \"%s\"\n\n", sOk, saveName)
+	).Run(); err != nil {
+		return scheduleWizardResult{}, err
 	}
 
-	return schedule, zone, nil
+	result := scheduleWizardResult{
+		Schedule:       schedule,
+		Timezone:       zone,
+		ActiveSchedule: activeSchedule,
+	}
+	if normalized := config.NormalizePresetName(saveName); normalized != "" {
+		result.SavedPreset = normalized
+		result.ActiveSchedule = normalized
+	}
+
+	return result, nil
+}
+
+func scheduleWizardSavedPresetMessage(result scheduleWizardResult) string {
+	if result.SavedPreset == "" {
+		return ""
+	}
+	return fmt.Sprintf("  %s Saved preset \"%s\"\n", sOk, result.SavedPreset)
 }
 
 func customScheduleWizard(sIn, sOut lipgloss.Style) (config.Schedule, error) {
@@ -615,7 +745,7 @@ func customScheduleWizard(sIn, sOut lipgloss.Style) (config.Schedule, error) {
 func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedule, error) {
 	// First ask how many blocks
 	var numBlocksStr string
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("How many time blocks?").
@@ -626,7 +756,9 @@ func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedul
 				).
 				Value(&numBlocksStr),
 		),
-	).Run()
+	).Run(); err != nil {
+		return config.DaySchedule{}, err
+	}
 
 	if numBlocksStr == "off" {
 		return config.DaySchedule{Enabled: false}, nil
@@ -663,10 +795,7 @@ func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedul
 				if s == "" {
 					return fmt.Errorf("enter a time like 08:30")
 				}
-				if len(s) != 5 || s[2] != ':' {
-					return fmt.Errorf("format: HH:MM")
-				}
-				return nil
+				return validateClockTime(s)
 			}))
 	}
 
@@ -681,8 +810,36 @@ func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedul
 			entries = append(entries, config.ScheduleEntry{Time: t})
 		}
 	}
+	if err := validateScheduleEntries(entries); err != nil {
+		return config.DaySchedule{}, err
+	}
 
 	return config.DaySchedule{Enabled: true, Times: entries}, nil
+}
+
+func validateClockTime(value string) error {
+	if len(value) != 5 || value[2] != ':' {
+		return fmt.Errorf("format: HH:MM")
+	}
+	if _, err := time.Parse("15:04", value); err != nil {
+		return fmt.Errorf("format: HH:MM")
+	}
+	return nil
+}
+
+func validateScheduleEntries(entries []config.ScheduleEntry) error {
+	var previous time.Time
+	for i, entry := range entries {
+		t, err := time.Parse("15:04", entry.Time)
+		if err != nil {
+			return fmt.Errorf("invalid time %q", entry.Time)
+		}
+		if i > 0 && !t.After(previous) {
+			return fmt.Errorf("times must be in chronological order")
+		}
+		previous = t
+	}
+	return nil
 }
 
 func makeSchedule(monThu, fri config.DaySchedule) config.Schedule {
@@ -767,7 +924,7 @@ func checkGhInstalled() error {
 		fmt.Printf("  Run: %s\n\n", sBold.Render("gh auth login"))
 
 		var doLogin bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Run 'gh auth login' now?").
@@ -775,7 +932,9 @@ func checkGhInstalled() error {
 					Negative("I'll do it later").
 					Value(&doLogin),
 			),
-		).Run()
+		).Run(); err != nil {
+			return err
+		}
 
 		if doLogin {
 			loginCmd := exec.Command("gh", "auth", "login")
@@ -847,7 +1006,7 @@ func telegramSetup() (config.TelegramConfig, error) {
 	fmt.Printf("     Copy the token it gives you (looks like %s)\n\n", sDim.Render("123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"))
 
 	var openBotFather bool
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Open @BotFather in browser?").
@@ -855,7 +1014,9 @@ func telegramSetup() (config.TelegramConfig, error) {
 				Negative("I already have a token").
 				Value(&openBotFather),
 		),
-	).Run()
+	).Run(); err != nil {
+		return config.TelegramConfig{}, err
+	}
 
 	if openBotFather {
 		openURL("https://t.me/BotFather")
@@ -888,7 +1049,7 @@ func telegramSetup() (config.TelegramConfig, error) {
 	fmt.Printf("     Send any message — it will reply with your ID (a number like %s)\n\n", sDim.Render("987654321"))
 
 	var openUserInfo bool
-	huh.NewForm(
+	if err := huh.NewForm(
 		huh.NewGroup(
 			huh.NewConfirm().
 				Title("Open @userinfobot in browser?").
@@ -896,7 +1057,9 @@ func telegramSetup() (config.TelegramConfig, error) {
 				Negative("I already have my ID").
 				Value(&openUserInfo),
 		),
-	).Run()
+	).Run(); err != nil {
+		return config.TelegramConfig{}, err
+	}
 
 	if openUserInfo {
 		openURL("https://t.me/userinfobot")
@@ -1128,11 +1291,14 @@ func loginFlow(existing *config.Config) (email, password, company, companyURL st
 		case woffu.ErrNetwork:
 			fmt.Printf("  %s Cannot connect to Woffu. Check your internet connection.\n\n", sErr.Render("✗"))
 			var retry bool
-			huh.NewForm(
+			err = huh.NewForm(
 				huh.NewGroup(
 					huh.NewConfirm().Title("Retry?").Affirmative("Yes").Negative("Quit").Value(&retry),
 				),
 			).Run()
+			if err != nil {
+				return
+			}
 			if !retry {
 				err = fmt.Errorf("login cancelled")
 				return
@@ -1141,11 +1307,14 @@ func loginFlow(existing *config.Config) (email, password, company, companyURL st
 		default:
 			fmt.Printf("  %s Login failed: %s\n\n", sErr.Render("✗"), authErr.Error())
 			var retry bool
-			huh.NewForm(
+			err = huh.NewForm(
 				huh.NewGroup(
 					huh.NewConfirm().Title("Try again from scratch?").Affirmative("Yes").Negative("Quit").Value(&retry),
 				),
 			).Run()
+			if err != nil {
+				return
+			}
 			if !retry {
 				err = fmt.Errorf("login cancelled")
 				return
@@ -1156,12 +1325,18 @@ func loginFlow(existing *config.Config) (email, password, company, companyURL st
 				huh.NewGroup(
 					huh.NewInput().Title("Email").Placeholder("you@company.com").Value(&email).
 						Validate(func(s string) error {
-							if !strings.Contains(s, "@") {
+							if !strings.Contains(s, "@") || !strings.Contains(s, ".") {
 								return fmt.Errorf("enter a valid email")
 							}
 							return nil
 						}),
-					huh.NewInput().Title("Password").EchoMode(huh.EchoModePassword).Value(&password),
+					huh.NewInput().Title("Password").EchoMode(huh.EchoModePassword).Value(&password).
+						Validate(func(s string) error {
+							if s == "" {
+								return fmt.Errorf("password cannot be empty")
+							}
+							return nil
+						}),
 				).Title("Login to Woffu"),
 			).Run()
 			if err != nil {

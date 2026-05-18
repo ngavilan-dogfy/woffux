@@ -32,6 +32,7 @@ var tabNames = [tabCount]string{"Status", "Calendar", "Events"}
 // ── Messages ──
 
 type dataMsg struct {
+	token        string
 	signInfo     *woffu.SignInfo
 	events       []woffu.AvailableUserEvent
 	profile      *woffu.UserProfile
@@ -42,14 +43,22 @@ type dataMsg struct {
 type errMsg struct{ err error }
 type signDoneMsg struct{}
 type autoToggleMsg struct{ enabled bool }
+type autoStatusMsg struct{ enabled bool }
 type syncDoneMsg struct{}
+type presetAppliedMsg struct {
+	name    string
+	cfg     *config.Config
+	syncErr error
+}
 type presetSavedMsg struct{ name string }
-type presetAppliedMsg struct{ name string }
 type clearFlashMsg struct{}
 type tickMsg time.Time
 type calendarDataMsg struct{ calendarDays []woffu.CalendarDay }
 type scheduleEditDoneMsg struct{}
-type execDoneMsg struct{ err error }
+type execDoneMsg struct {
+	err   error
+	label string
+}
 
 // ── Action items for the overlay menu ──
 
@@ -63,7 +72,10 @@ type action struct {
 
 type overlayKind int
 
-type requestDoneMsg struct{ count int }
+type requestDoneMsg struct {
+	count  int
+	action string
+}
 
 const (
 	overlayNone       overlayKind = iota
@@ -120,7 +132,7 @@ func NewDashboard(client, companyClient *woffu.Client, cfg *config.Config, passw
 }
 
 func (d *Dashboard) Init() tea.Cmd {
-	return tea.Batch(d.fetchData(), d.tick())
+	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.tick())
 }
 
 // ── Update ──
@@ -136,6 +148,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case dataMsg:
 		d.loading = false
+		d.token = msg.token
 		d.signInfo = msg.signInfo
 		d.events = msg.events
 		d.profile = msg.profile
@@ -157,13 +170,21 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case requestDoneMsg:
-		d.setFlash(fmt.Sprintf("%d requests submitted!", msg.count), false)
+		action := msg.action
+		if action == "" {
+			action = "submitted"
+		}
+		noun := "requests"
+		if msg.count == 1 {
+			noun = "request"
+		}
+		d.setFlash(fmt.Sprintf("%d %s %s!", msg.count, noun, action), false)
 		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
 
 	case signDoneMsg:
 		d.signing = false
 		d.setFlash("Signed successfully! Data refreshing...", false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+		return d, tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.clearFlashAfter(3*time.Second))
 
 	case autoToggleMsg:
 		v := msg.enabled
@@ -175,33 +196,49 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return d, d.clearFlashAfter(3 * time.Second)
 
-	case presetSavedMsg:
-		// Reload config to pick up the new preset in the action menu
-		if newCfg, err := config.Load(); err == nil {
-			d.cfg = newCfg
-		}
-		d.setFlash(fmt.Sprintf("Preset \"%s\" saved!", msg.name), false)
-		return d, d.clearFlashAfter(3 * time.Second)
-
-	case presetAppliedMsg:
-		d.setFlash(fmt.Sprintf("Preset \"%s\" applied!", msg.name), false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+	case autoStatusMsg:
+		v := msg.enabled
+		d.autoActive = &v
 
 	case syncDoneMsg:
 		d.setFlash("Synced to GitHub", false)
 		return d, d.clearFlashAfter(3 * time.Second)
 
-	case execDoneMsg:
-		if msg.err != nil {
-			d.setFlash("Schedule edit cancelled", true)
-			return d, d.clearFlashAfter(3 * time.Second)
+	case presetAppliedMsg:
+		d.cfg = msg.cfg
+		if msg.syncErr != nil {
+			d.setFlash(fmt.Sprintf("Switched to \"%s\"; GitHub sync failed: %s", msg.name, msg.syncErr), true)
+			return d, tea.Batch(d.fetchData(), d.clearFlashAfter(5*time.Second))
 		}
-		// Reload config after schedule edit
+		d.setFlash(fmt.Sprintf("Switched to \"%s\" schedule", msg.name), false)
+		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+
+	case presetSavedMsg:
+		// Reload config to pick up the new preset in saved_schedules
 		newCfg, err := config.Load()
 		if err == nil {
 			d.cfg = newCfg
+			if pw, pwErr := config.GetPassword(newCfg.WoffuEmail); pwErr == nil {
+				d.password = pw
+			}
 		}
-		d.setFlash("Schedule updated!", false)
+		d.setFlash(fmt.Sprintf("Saved preset \"%s\"", msg.name), false)
+		return d, d.clearFlashAfter(3 * time.Second)
+
+	case execDoneMsg:
+		if msg.err != nil {
+			d.setFlash(fmt.Sprintf("%s edit cancelled", msg.label), true)
+			return d, d.clearFlashAfter(3 * time.Second)
+		}
+		// Reload config after external editor exits.
+		newCfg, err := config.Load()
+		if err == nil {
+			d.cfg = newCfg
+			if pw, pwErr := config.GetPassword(newCfg.WoffuEmail); pwErr == nil {
+				d.password = pw
+			}
+		}
+		d.setFlash(fmt.Sprintf("%s updated!", msg.label), false)
 		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
 
 	case errMsg:
@@ -273,11 +310,13 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			d.overlay = overlayNone
 		case "enter":
-			if d.presetInput != "" {
-				name := d.presetInput
+			name := config.NormalizePresetName(d.presetInput)
+			if name != "" {
 				d.overlay = overlayNone
 				return d, d.savePreset(name)
 			}
+			d.setFlash("Preset name cannot be empty", true)
+			return d, d.clearFlashAfter(3 * time.Second)
 		case "backspace":
 			if len(d.presetInput) > 0 {
 				d.presetInput = d.presetInput[:len(d.presetInput)-1]
@@ -699,7 +738,7 @@ func (d *Dashboard) renderSlots() string {
 			// If this slot has no OUT, show a track line to "now"
 			if s.Out == "" {
 				track := sTimelineTrack.Render(" " + strings.Repeat("\u2504", 12) + " ") // ┄
-				nowLabel := sNowMarker.Render("\u25CF now") // ●
+				nowLabel := sNowMarker.Render("\u25CF now")                              // ●
 				rows = append(rows, fmt.Sprintf("  %s %s  %s%s%s", marker, timeStr, label, track, nowLabel))
 			} else {
 				rows = append(rows, fmt.Sprintf("  %s %s  %s", marker, timeStr, label))
@@ -913,27 +952,24 @@ func (d *Dashboard) getActions() []action {
 	actions = append(actions, action{key: "---", name: "Schedule", desc: ""})
 
 	if d.cfg.SavedSchedules != nil && len(d.cfg.SavedSchedules) > 0 {
-		for name := range d.cfg.SavedSchedules {
+		for _, name := range d.cfg.SchedulePresetNames() {
+			label := fmt.Sprintf("Switch to \"%s\" schedule", name)
+			desc := "Apply saved schedule preset"
 			if name == d.cfg.ActiveSchedule {
-				// Active preset: shown but not selectable
-				actions = append(actions, action{key: "preset-active", name: "\u25CF " + name, desc: "active"})
-			} else {
-				// Inactive preset: selectable to switch
-				actions = append(actions, action{key: "preset:" + name, name: "\u25CB " + name, desc: "switch"})
+				label += " (current)"
+				desc = "Re-apply current schedule preset"
 			}
+			actions = append(actions, action{key: "preset:" + name, name: label, desc: desc})
 		}
 	}
 
 	actions = append(actions,
-		action{key: "edit-schedule", name: "Edit schedule...", desc: ""},
-	)
-
-	// Tools section
-	actions = append(actions, action{key: "---", name: "Tools", desc: ""})
-	actions = append(actions,
-		action{key: "sync", name: "Sync to GitHub", desc: ""},
-		action{key: "open", name: "Open Woffu", desc: ""},
-		action{key: "open-gh", name: "Open GitHub Actions", desc: ""},
+		action{key: "save-preset", name: "Save as preset", desc: "Save current schedule with a name"},
+		action{key: "edit-schedule", name: "Edit schedule", desc: "Change auto-sign times"},
+		action{key: "edit-config", name: "Edit settings", desc: "Change credentials, coordinates, Telegram, schedule"},
+		action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"},
+		action{key: "open", name: "Open Woffu", desc: "Open Woffu in browser"},
+		action{key: "open-gh", name: "Open GitHub fork", desc: "View fork and workflow runs"},
 	)
 
 	return actions
@@ -949,6 +985,8 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 		return d.toggleAuto(false)
 	case "edit-schedule":
 		return d.editSchedule()
+	case "edit-config":
+		return d.editConfig()
 	case "sync":
 		return d.syncGitHub()
 	case "open":
@@ -1027,61 +1065,58 @@ func (d *Dashboard) renderOverlayMenu() string {
 // ── Commands ──
 
 func (d *Dashboard) fetchData() tea.Cmd {
+	client := d.client
+	companyClient := d.companyClient
+	cfg := *d.cfg
+	password := d.password
+	calYear := time.Now().Year()
+	calMonth := time.Now().Month()
+	if d.cal != nil {
+		calYear = d.cal.year
+		calMonth = d.cal.month
+	}
+
 	return func() tea.Msg {
-		token, err := woffu.Authenticate(d.client, d.companyClient, d.cfg.WoffuEmail, d.password)
+		token, err := woffu.Authenticate(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
 			return errMsg{err}
 		}
-		d.token = token
 
-		calYear := time.Now().Year()
-		calMonth := time.Now().Month()
-		if d.cal != nil {
-			calYear = d.cal.year
-			calMonth = d.cal.month
-		}
-
-		// Parallel API calls — all independent after auth
 		var (
-			profile  *woffu.UserProfile
-			info     *woffu.SignInfo
-			events   []woffu.AvailableUserEvent
-			slots    []woffu.SignSlot
-			calDays  []woffu.CalendarDay
-			userId   int
-			reqs     []woffu.UserRequest
-			signs    []woffu.SignRecord
-			infoErr  error
-			wg       sync.WaitGroup
+			profile   *woffu.UserProfile
+			info      *woffu.SignInfo
+			events    []woffu.AvailableUserEvent
+			slots     []woffu.SignSlot
+			calDays   []woffu.CalendarDay
+			userId    int
+			reqs      []woffu.UserRequest
+			signs     []woffu.SignRecord
+			infoErr   error
+			eventsErr error
+			wg        sync.WaitGroup
 		)
 
-		wg.Add(6)
-		go func() { defer wg.Done(); profile, _ = woffu.GetUserProfile(d.companyClient, token) }()
+		wg.Add(5)
+		go func() { defer wg.Done(); profile, _ = woffu.GetUserProfile(companyClient, token) }()
 		go func() {
 			defer wg.Done()
-			info, infoErr = woffu.GetSignInfo(d.companyClient, token,
-				d.cfg.Latitude, d.cfg.Longitude, d.cfg.HomeLatitude, d.cfg.HomeLongitude)
+			info, infoErr = woffu.GetSignInfo(companyClient, token,
+				cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)
 		}()
-		go func() { defer wg.Done(); events, _ = woffu.GetAvailableEvents(d.companyClient, token) }()
-		go func() { defer wg.Done(); slots, _ = woffu.GetTodaySlots(d.companyClient, token) }()
+		go func() { defer wg.Done(); events, eventsErr = woffu.GetAvailableEvents(companyClient, token) }()
+		go func() { defer wg.Done(); slots, _ = woffu.GetTodaySlots(companyClient, token) }()
 		go func() {
 			defer wg.Done()
-			if d.cfg.GithubFork != "" {
-				if enabled, err := gh.IsAutoSignEnabled(d.cfg.GithubFork); err == nil {
-					v := enabled
-					d.autoActive = &v
-				}
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			calDays, _ = woffu.GetCalendarMonthYM(d.companyClient, token, calYear, calMonth)
-			userId, _, _ = woffu.GetUserIds(d.companyClient, token)
+			calDays, _ = woffu.GetCalendarMonthYM(companyClient, token, calYear, calMonth)
+			userId, _, _ = woffu.GetUserIds(companyClient, token)
 			if userId > 0 {
 				var wg2 sync.WaitGroup
 				wg2.Add(2)
-				go func() { defer wg2.Done(); reqs, _ = woffu.GetMonthRequests(d.companyClient, token, userId, calYear, calMonth) }()
-				go func() { defer wg2.Done(); signs, _ = woffu.GetMonthSigns(d.companyClient, token, calYear, calMonth) }()
+				go func() {
+					defer wg2.Done()
+					reqs, _ = woffu.GetMonthRequests(companyClient, token, userId, calYear, calMonth)
+				}()
+				go func() { defer wg2.Done(); signs, _ = woffu.GetMonthSigns(companyClient, token, calYear, calMonth) }()
 				wg2.Wait()
 				woffu.EnrichCalendarDays(calDays, reqs, signs)
 			}
@@ -1091,18 +1126,30 @@ func (d *Dashboard) fetchData() tea.Cmd {
 		if infoErr != nil {
 			return errMsg{infoErr}
 		}
+		if eventsErr != nil {
+			return errMsg{eventsErr}
+		}
 
-		return dataMsg{signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, userId: userId}
+		return dataMsg{token: token, signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, userId: userId}
 	}
 }
 
 // fetchCalendarData fetches only calendar + requests + signs for the displayed month.
 // Uses cached token (no re-auth) and runs API calls in parallel.
 func (d *Dashboard) fetchCalendarData() tea.Cmd {
-	return func() tea.Msg {
-		calYear := d.cal.year
-		calMonth := d.cal.month
+	if d.cal == nil {
+		return nil
+	}
+	if d.token == "" {
+		return d.fetchData()
+	}
+	companyClient := d.companyClient
+	token := d.token
+	userId := d.userId
+	calYear := d.cal.year
+	calMonth := d.cal.month
 
+	return func() tea.Msg {
 		var calDays []woffu.CalendarDay
 		var reqs []woffu.UserRequest
 		var signs []woffu.SignRecord
@@ -1113,18 +1160,18 @@ func (d *Dashboard) fetchCalendarData() tea.Cmd {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			calDays, calErr = woffu.GetCalendarMonthYM(d.companyClient, d.token, calYear, calMonth)
+			calDays, calErr = woffu.GetCalendarMonthYM(companyClient, token, calYear, calMonth)
 		}()
 
-		if d.userId > 0 {
+		if userId > 0 {
 			wg.Add(2)
 			go func() {
 				defer wg.Done()
-				reqs, _ = woffu.GetMonthRequests(d.companyClient, d.token, d.userId, calYear, calMonth)
+				reqs, _ = woffu.GetMonthRequests(companyClient, token, userId, calYear, calMonth)
 			}()
 			go func() {
 				defer wg.Done()
-				signs, _ = woffu.GetMonthSigns(d.companyClient, d.token, calYear, calMonth)
+				signs, _ = woffu.GetMonthSigns(companyClient, token, calYear, calMonth)
 			}()
 		}
 
@@ -1139,6 +1186,19 @@ func (d *Dashboard) fetchCalendarData() tea.Cmd {
 	}
 }
 
+func (d *Dashboard) fetchAutoStatus() tea.Cmd {
+	repo := d.cfg.GithubFork
+	if repo == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		enabled, err := gh.IsAutoSignEnabled(repo)
+		if err != nil {
+			return nil // Silently fail - not critical
+		}
+		return autoStatusMsg{enabled: enabled}
+	}
+}
 
 func (d *Dashboard) trySign() tea.Cmd {
 	if d.signing {
@@ -1154,31 +1214,40 @@ func (d *Dashboard) trySign() tea.Cmd {
 }
 
 func (d *Dashboard) doSign() tea.Cmd {
-	return func() tea.Msg {
-		if d.signInfo == nil {
+	if d.signInfo == nil {
+		return func() tea.Msg {
 			return errMsg{fmt.Errorf("no sign info available")}
 		}
-		err := woffu.DoSign(d.companyClient, d.token, d.signInfo.Latitude, d.signInfo.Longitude)
+	}
+	companyClient := d.companyClient
+	token := d.token
+	info := *d.signInfo
+	tgCfg := notify.TelegramConfig{BotToken: d.cfg.Telegram.BotToken, ChatID: d.cfg.Telegram.ChatID}
+
+	return func() tea.Msg {
+		err := woffu.DoSign(companyClient, token, info.Latitude, info.Longitude)
 		if err != nil {
 			return errMsg{err}
 		}
-		tgCfg := notify.TelegramConfig{BotToken: d.cfg.Telegram.BotToken, ChatID: d.cfg.Telegram.ChatID}
-		_ = notify.SendSignedNotification(tgCfg, d.signInfo)
+		_ = notify.SendSignedNotification(tgCfg, &info)
 		return signDoneMsg{}
 	}
 }
 
 func (d *Dashboard) toggleAuto(enable bool) tea.Cmd {
+	cfgCopy := *d.cfg
+	cfg := &cfgCopy
+	repo := cfg.GithubFork
 	return func() tea.Msg {
 		var err error
 		if enable {
 			// Re-enabling: sync workflows + reload crons to ensure GitHub picks them up
-			if syncErr := gh.SyncWorkflows(d.cfg); syncErr != nil {
+			if syncErr := gh.SyncWorkflows(cfg); syncErr != nil {
 				return errMsg{fmt.Errorf("sync workflows: %w", syncErr)}
 			}
-			err = gh.ReloadAutoSign(d.cfg.GithubFork)
+			err = gh.ReloadAutoSign(repo)
 		} else {
-			err = gh.DisableAutoSign(d.cfg.GithubFork)
+			err = gh.DisableAutoSign(repo)
 		}
 		if err != nil {
 			return errMsg{err}
@@ -1188,12 +1257,21 @@ func (d *Dashboard) toggleAuto(enable bool) tea.Cmd {
 }
 
 func (d *Dashboard) syncGitHub() tea.Cmd {
+	cfgCopy := *d.cfg
+	cfg := &cfgCopy
+	password := d.password
 	return func() tea.Msg {
-		pw, _ := config.GetPassword(d.cfg.WoffuEmail)
-		if err := gh.SyncSecrets(d.cfg, pw); err != nil {
+		if password == "" {
+			pw, err := config.GetPassword(cfg.WoffuEmail)
+			if err != nil {
+				return errMsg{fmt.Errorf("get password: %w", err)}
+			}
+			password = pw
+		}
+		if err := gh.SyncSecrets(cfg, password); err != nil {
 			return errMsg{fmt.Errorf("sync secrets: %w", err)}
 		}
-		if err := gh.SyncWorkflows(d.cfg); err != nil {
+		if err := gh.SyncWorkflows(cfg); err != nil {
 			return errMsg{fmt.Errorf("sync workflows: %w", err)}
 		}
 		// Force GitHub to reload cron triggers
@@ -1208,13 +1286,21 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 
 // editSchedule suspends the TUI and runs `woffux schedule edit` interactively.
 func (d *Dashboard) editSchedule() tea.Cmd {
+	return d.execWoffux("Schedule", "schedule", "edit")
+}
+
+func (d *Dashboard) editConfig() tea.Cmd {
+	return d.execWoffux("Settings", "config", "edit")
+}
+
+func (d *Dashboard) execWoffux(label string, args ...string) tea.Cmd {
 	bin, err := os.Executable()
 	if err != nil {
 		bin = "woffux"
 	}
-	c := exec.Command(bin, "schedule", "edit")
+	c := exec.Command(bin, args...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		return execDoneMsg{err: err}
+		return execDoneMsg{err: err, label: label}
 	})
 }
 
@@ -1318,9 +1404,11 @@ func (d *Dashboard) executeCalAction(a action) tea.Cmd {
 	}
 
 	d.setFlash(fmt.Sprintf("Submitting %d requests...", len(eligibleDates)), false)
+	companyClient := d.companyClient
+	token := d.token
 
 	return func() tea.Msg {
-		types, err := woffu.GetRequestTypes(d.companyClient, d.token)
+		types, err := woffu.GetRequestTypes(companyClient, token)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -1336,20 +1424,20 @@ func (d *Dashboard) executeCalAction(a action) tea.Cmd {
 			return errMsg{fmt.Errorf("request type \"%s\" not found", search)}
 		}
 
-		userId, companyId, err := woffu.GetUserIds(d.companyClient, d.token)
+		userId, companyId, err := woffu.GetUserIds(companyClient, token)
 		if err != nil {
 			return errMsg{err}
 		}
 
 		count := 0
 		for _, date := range eligibleDates {
-			err := woffu.CreateRequest(d.companyClient, d.token, userId, companyId, matchedType.ID, date, date, matchedType.IsVacation)
+			err := woffu.CreateRequest(companyClient, token, userId, companyId, matchedType.ID, date, date, matchedType.IsVacation)
 			if err == nil {
 				count++
 			}
 		}
 
-		return requestDoneMsg{count: count}
+		return requestDoneMsg{count: count, action: "submitted"}
 	}
 }
 
@@ -1361,7 +1449,16 @@ func (d *Dashboard) cancelSelectedRequests(targetStatus string) tea.Cmd {
 	for _, info := range infos {
 		for _, r := range info.Requests {
 			if r.Status == targetStatus {
-				requestIDs = append(requestIDs, r.RequestID)
+				seen := false
+				for _, existing := range requestIDs {
+					if existing == r.RequestID {
+						seen = true
+						break
+					}
+				}
+				if !seen {
+					requestIDs = append(requestIDs, r.RequestID)
+				}
 			}
 		}
 	}
@@ -1372,15 +1469,17 @@ func (d *Dashboard) cancelSelectedRequests(targetStatus string) tea.Cmd {
 	}
 
 	d.setFlash(fmt.Sprintf("Cancelling %d requests...", len(requestIDs)), false)
+	companyClient := d.companyClient
+	token := d.token
 
 	return func() tea.Msg {
 		count := 0
 		for _, id := range requestIDs {
-			if err := woffu.CancelRequest(d.companyClient, d.token, id); err == nil {
+			if err := woffu.CancelRequest(companyClient, token, id); err == nil {
 				count++
 			}
 		}
-		return requestDoneMsg{count: count}
+		return requestDoneMsg{count: count, action: "cancelled"}
 	}
 }
 
@@ -1531,11 +1630,13 @@ func (d *Dashboard) executeDayAction(a action) tea.Cmd {
 			return nil
 		}
 		d.setFlash("Cancelling request...", false)
+		companyClient := d.companyClient
+		token := d.token
 		return func() tea.Msg {
-			if err := woffu.CancelRequest(d.companyClient, d.token, reqID); err != nil {
+			if err := woffu.CancelRequest(companyClient, token, reqID); err != nil {
 				return errMsg{err}
 			}
-			return requestDoneMsg{count: 1}
+			return requestDoneMsg{count: 1, action: "cancelled"}
 		}
 	}
 
@@ -1558,8 +1659,10 @@ func (d *Dashboard) executeDayAction(a action) tea.Cmd {
 	date := info.Date
 
 	d.setFlash("Submitting request...", false)
+	companyClient := d.companyClient
+	token := d.token
 	return func() tea.Msg {
-		types, err := woffu.GetRequestTypes(d.companyClient, d.token)
+		types, err := woffu.GetRequestTypes(companyClient, token)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -1575,45 +1678,59 @@ func (d *Dashboard) executeDayAction(a action) tea.Cmd {
 			return errMsg{fmt.Errorf("request type \"%s\" not found", search)}
 		}
 
-		userId, companyId, err := woffu.GetUserIds(d.companyClient, d.token)
+		userId, companyId, err := woffu.GetUserIds(companyClient, token)
 		if err != nil {
 			return errMsg{err}
 		}
 
-		if err := woffu.CreateRequest(d.companyClient, d.token, userId, companyId, matchedType.ID, date, date, matchedType.IsVacation); err != nil {
+		if err := woffu.CreateRequest(companyClient, token, userId, companyId, matchedType.ID, date, date, matchedType.IsVacation); err != nil {
 			return errMsg{err}
 		}
 
-		return requestDoneMsg{count: 1}
+		return requestDoneMsg{count: 1, action: "submitted"}
 	}
 }
 
 func (d *Dashboard) applyPreset(name string) tea.Cmd {
 	return func() tea.Msg {
-		if !d.cfg.LoadSchedulePreset(name) {
+		// Load a fresh config to avoid mutating TUI state from a goroutine
+		freshCfg, err := config.Load()
+		if err != nil {
+			return errMsg{fmt.Errorf("load config: %w", err)}
+		}
+		if !freshCfg.LoadSchedulePreset(name) {
 			return errMsg{fmt.Errorf("preset \"%s\" not found", name)}
 		}
-		if err := config.Save(d.cfg); err != nil {
+		if err := config.Save(freshCfg); err != nil {
 			return errMsg{fmt.Errorf("save config: %w", err)}
 		}
-		// Sync workflows + reload crons on GitHub
-		if d.cfg.GithubFork != "" {
-			if err := gh.SyncWorkflows(d.cfg); err != nil {
-				return errMsg{fmt.Errorf("sync workflows: %w", err)}
-			}
-			if err := gh.ReloadAutoSign(d.cfg.GithubFork); err != nil {
-				return errMsg{fmt.Errorf("reload auto-sign: %w", err)}
+		// Sync workflows and reload crons if GitHub is configured.
+		var syncErr error
+		if freshCfg.GithubFork != "" {
+			if err := gh.SyncWorkflows(freshCfg); err != nil {
+				syncErr = fmt.Errorf("sync workflows: %w", err)
+			} else if err := gh.ReloadAutoSign(freshCfg.GithubFork); err != nil {
+				syncErr = fmt.Errorf("reload auto-sign: %w", err)
 			}
 		}
-		return presetAppliedMsg{name: name}
+		return presetAppliedMsg{name: name, cfg: freshCfg, syncErr: syncErr}
 	}
 }
 
 func (d *Dashboard) savePreset(name string) tea.Cmd {
+	name = config.NormalizePresetName(name)
+	// Capture schedule before entering goroutine
+	schedule := d.cfg.Schedule
 	return func() tea.Msg {
-		d.cfg.SaveSchedulePreset(name, d.cfg.Schedule)
-		d.cfg.ActiveSchedule = name
-		if err := config.Save(d.cfg); err != nil {
+		freshCfg, err := config.Load()
+		if err != nil {
+			return errMsg{fmt.Errorf("load config: %w", err)}
+		}
+		if err := freshCfg.SaveSchedulePreset(name, schedule); err != nil {
+			return errMsg{err}
+		}
+		freshCfg.ActiveSchedule = name
+		if err := config.Save(freshCfg); err != nil {
 			return errMsg{fmt.Errorf("save config: %w", err)}
 		}
 		return presetSavedMsg{name: name}

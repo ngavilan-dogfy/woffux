@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
@@ -28,6 +29,15 @@ Examples:
   woffux request --type Vacaciones --dates 2026-04-07,2026-04-08,2026-04-09
   woffux request cancel 17117405                  Cancel a request by ID`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		var parsedDates []string
+		if requestDates != "" {
+			var err error
+			parsedDates, err = parseDateList(requestDates)
+			if err != nil {
+				return err
+			}
+		}
+
 		cfg, password, err := loadConfigOrSetup()
 		if err != nil {
 			return err
@@ -76,10 +86,7 @@ Examples:
 		// Resolve dates
 		var dates []string
 		if requestDates != "" {
-			dates = strings.Split(requestDates, ",")
-			for i := range dates {
-				dates[i] = strings.TrimSpace(dates[i])
-			}
+			dates = parsedDates
 		} else {
 			// Interactive: enter dates
 			var datesInput string
@@ -91,19 +98,17 @@ Examples:
 						Placeholder("2026-03-20,2026-03-21").
 						Value(&datesInput).
 						Validate(func(s string) error {
-							if s == "" {
-								return fmt.Errorf("enter at least one date")
-							}
-							return nil
+							_, err := parseDateList(s)
+							return err
 						}),
 				).Title(selectedType.Name),
 			).Run()
 			if err != nil {
 				return err
 			}
-			dates = strings.Split(datesInput, ",")
-			for i := range dates {
-				dates[i] = strings.TrimSpace(dates[i])
+			dates, err = parseDateList(datesInput)
+			if err != nil {
+				return err
 			}
 		}
 
@@ -163,7 +168,7 @@ Find the ID with:  woffux requests
 		}
 
 		var confirm bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Cancel request #%d?", requestId)).
@@ -172,7 +177,9 @@ Find the ID with:  woffux requests
 					Negative("Keep it").
 					Value(&confirm),
 			),
-		).Run()
+		).Run(); err != nil {
+			return err
+		}
 
 		if !confirm {
 			return nil
@@ -202,6 +209,25 @@ func init() {
 	requestCmd.Flags().StringVarP(&requestType, "type", "t", "", "Request type name (e.g. Teletrabajo, Vacaciones)")
 	requestCmd.Flags().StringVarP(&requestDates, "dates", "d", "", "Dates (YYYY-MM-DD, comma-separated)")
 	requestCmd.AddCommand(requestCancelCmd)
+}
+
+func parseDateList(value string) ([]string, error) {
+	parts := strings.Split(value, ",")
+	dates := make([]string, 0, len(parts))
+	for _, part := range parts {
+		date := strings.TrimSpace(part)
+		if date == "" {
+			return nil, fmt.Errorf("dates must be YYYY-MM-DD values separated by commas")
+		}
+		if _, err := time.Parse("2006-01-02", date); err != nil {
+			return nil, fmt.Errorf("invalid date %q (use YYYY-MM-DD)", date)
+		}
+		dates = append(dates, date)
+	}
+	if len(dates) == 0 {
+		return nil, fmt.Errorf("enter at least one date")
+	}
+	return dates, nil
 }
 
 func pickRequestType(types []woffu.RequestType) (*woffu.RequestType, error) {

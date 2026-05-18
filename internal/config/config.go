@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,15 +34,15 @@ type TelegramConfig struct {
 }
 
 type Config struct {
-	WoffuURL        string  `yaml:"woffu_url"`
-	WoffuCompanyURL string  `yaml:"woffu_company_url"`
-	WoffuEmail      string  `yaml:"woffu_email"`
-	Latitude        float64 `yaml:"latitude"`
-	Longitude       float64 `yaml:"longitude"`
-	HomeLatitude    float64 `yaml:"home_latitude"`
-	HomeLongitude   float64 `yaml:"home_longitude"`
-	GithubFork      string  `yaml:"github_fork,omitempty"`
-	Timezone        string  `yaml:"timezone"`
+	WoffuURL        string              `yaml:"woffu_url"`
+	WoffuCompanyURL string              `yaml:"woffu_company_url"`
+	WoffuEmail      string              `yaml:"woffu_email"`
+	Latitude        float64             `yaml:"latitude"`
+	Longitude       float64             `yaml:"longitude"`
+	HomeLatitude    float64             `yaml:"home_latitude"`
+	HomeLongitude   float64             `yaml:"home_longitude"`
+	GithubFork      string              `yaml:"github_fork,omitempty"`
+	Timezone        string              `yaml:"timezone"`
 	Schedule        Schedule            `yaml:"schedule"`
 	SavedSchedules  map[string]Schedule `yaml:"saved_schedules,omitempty"`
 	ActiveSchedule  string              `yaml:"active_schedule,omitempty"`
@@ -56,22 +58,104 @@ func (c *Config) GetRandomDelaySecs() int {
 	return 90
 }
 
+// NormalizePresetName trims user input for stable preset lookup and display.
+func NormalizePresetName(name string) string {
+	return strings.TrimSpace(name)
+}
+
 // SaveSchedulePreset saves a schedule with a name.
-func (c *Config) SaveSchedulePreset(name string, s Schedule) {
+func (c *Config) SaveSchedulePreset(name string, s Schedule) error {
+	name = NormalizePresetName(name)
+	if name == "" {
+		return fmt.Errorf("preset name cannot be empty")
+	}
 	if c.SavedSchedules == nil {
 		c.SavedSchedules = make(map[string]Schedule)
 	}
-	c.SavedSchedules[name] = s
+	c.SavedSchedules[name] = cloneSchedule(s)
+	return nil
 }
 
 // LoadSchedulePreset applies a saved schedule preset.
 func (c *Config) LoadSchedulePreset(name string) bool {
+	name = NormalizePresetName(name)
 	if s, ok := c.SavedSchedules[name]; ok {
-		c.Schedule = s
+		c.Schedule = cloneSchedule(s)
 		c.ActiveSchedule = name
 		return true
 	}
 	return false
+}
+
+// SchedulePresetNames returns saved preset names in deterministic order.
+func (c *Config) SchedulePresetNames() []string {
+	names := make([]string, 0, len(c.SavedSchedules))
+	for name := range c.SavedSchedules {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// Normalize clears stale active preset metadata after manual schedule edits.
+func (c *Config) Normalize() {
+	c.ActiveSchedule = NormalizePresetName(c.ActiveSchedule)
+	if c.ActiveSchedule == "" {
+		return
+	}
+	preset, ok := c.SavedSchedules[c.ActiveSchedule]
+	if !ok || !SchedulesEqual(c.Schedule, preset) {
+		c.ActiveSchedule = ""
+	}
+}
+
+func CloneSchedulePresets(src map[string]Schedule) map[string]Schedule {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]Schedule, len(src))
+	for name, schedule := range src {
+		dst[name] = cloneSchedule(schedule)
+	}
+	return dst
+}
+
+func SchedulesEqual(a, b Schedule) bool {
+	return daySchedulesEqual(a.Monday, b.Monday) &&
+		daySchedulesEqual(a.Tuesday, b.Tuesday) &&
+		daySchedulesEqual(a.Wednesday, b.Wednesday) &&
+		daySchedulesEqual(a.Thursday, b.Thursday) &&
+		daySchedulesEqual(a.Friday, b.Friday)
+}
+
+func cloneSchedule(s Schedule) Schedule {
+	return Schedule{
+		Monday:    cloneDaySchedule(s.Monday),
+		Tuesday:   cloneDaySchedule(s.Tuesday),
+		Wednesday: cloneDaySchedule(s.Wednesday),
+		Thursday:  cloneDaySchedule(s.Thursday),
+		Friday:    cloneDaySchedule(s.Friday),
+	}
+}
+
+func cloneDaySchedule(d DaySchedule) DaySchedule {
+	cp := DaySchedule{Enabled: d.Enabled}
+	if len(d.Times) > 0 {
+		cp.Times = append([]ScheduleEntry(nil), d.Times...)
+	}
+	return cp
+}
+
+func daySchedulesEqual(a, b DaySchedule) bool {
+	if a.Enabled != b.Enabled || len(a.Times) != len(b.Times) {
+		return false
+	}
+	for i := range a.Times {
+		if a.Times[i] != b.Times[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // DefaultSchedule returns the default signing schedule.
@@ -111,6 +195,7 @@ func Load() (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
+	cfg.Normalize()
 
 	return &cfg, nil
 }
@@ -168,6 +253,7 @@ func Save(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	cfg.Normalize()
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

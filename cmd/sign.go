@@ -35,6 +35,11 @@ Batch (from stdin):
 
 In CI, reads credentials from environment variables.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		expectedAction, err := parseExpectedSignAction(signExpected)
+		if err != nil {
+			return err
+		}
+
 		cfg, password, err := config.LoadOrEnv()
 		if err != nil {
 			return err
@@ -73,14 +78,13 @@ In CI, reads credentials from environment variables.`,
 		}
 
 		// Guard: check if sign should be skipped based on expected action
-		if signExpected != "" {
-			expected := woffu.SignAction(signExpected)
+		if expectedAction != "" {
 			slots, slotsErr := woffu.GetTodaySlots(companyClient, token)
 			if slotsErr != nil {
 				return fmt.Errorf("get slots: %w", slotsErr)
 			}
-			if woffu.ShouldSkipSign(slots, expected) {
-				reason := fmt.Sprintf("Already signed %s", signExpected)
+			if woffu.ShouldSkipSign(slots, expectedAction) {
+				reason := fmt.Sprintf("Already signed %s", expectedAction)
 				if isTTY() {
 					fmt.Printf("%s — skipping.\n", reason)
 				} else {
@@ -118,6 +122,20 @@ In CI, reads credentials from environment variables.`,
 func init() {
 	signCmd.Flags().BoolVar(&signForce, "force", false, "Sign even if not a working day")
 	signCmd.Flags().StringVar(&signExpected, "expected", "", "Expected sign action: 'in' or 'out'. Skips if already in that state.")
+}
+
+func parseExpectedSignAction(value string) (woffu.SignAction, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "":
+		return "", nil
+	case string(woffu.SignActionIn):
+		return woffu.SignActionIn, nil
+	case string(woffu.SignActionOut):
+		return woffu.SignActionOut, nil
+	default:
+		return "", fmt.Errorf("invalid --expected value %q (use \"in\" or \"out\")", value)
+	}
 }
 
 // readStdinLines reads non-empty lines from stdin (for batch piping).

@@ -18,27 +18,21 @@ type CronEntry struct {
 }
 
 // GenerateCrons converts the schedule config into GitHub Actions cron expressions.
-// For DST timezones, generates two separate cron entries per sign time — one for
-// each UTC offset (e.g., "30 6 * * 1-4" and "30 7 * * 1-4").
-// A timezone guard step at runtime skips the entry whose offset is not active.
+// For DST timezones, it emits one cron per UTC offset. The workflow guard then
+// skips the offset that is not active, without relying on comma-separated hours.
 func GenerateCrons(schedule config.Schedule, tz string) []CronEntry {
-	var entries []CronEntry
-
 	stdOff, dstOff := utcOffsets(tz)
-	isDST := stdOff != dstOff
-
-	// Group days by their schedule to produce compact cron expressions
-	type dayTimes struct {
-		days  []int
-		names []string
-		times []config.ScheduleEntry
+	offsets := []int{stdOff}
+	if dstOff != stdOff {
+		offsets = append(offsets, dstOff)
 	}
 
-	allDays := []struct {
+	type scheduledDay struct {
 		day  config.DaySchedule
 		num  int
 		name string
-	}{
+	}
+	allDays := []scheduledDay{
 		{schedule.Monday, 1, "Mon"},
 		{schedule.Tuesday, 2, "Tue"},
 		{schedule.Wednesday, 3, "Wed"},
@@ -46,85 +40,96 @@ func GenerateCrons(schedule config.Schedule, tz string) []CronEntry {
 		{schedule.Friday, 5, "Fri"},
 	}
 
-	// Group days with identical schedules
-	groups := make(map[string]*dayTimes)
+	type cronGroup struct {
+		minute     int
+		hour       int
+		offset     int
+		action     string
+		localTime  string
+		localNames map[string]bool
+		utcDays    map[int]bool
+	}
+
+	groups := make(map[string]*cronGroup)
 	for _, d := range allDays {
 		if !d.day.Enabled {
 			continue
 		}
-		key := timesKey(d.day.Times)
-		if g, ok := groups[key]; ok {
-			g.days = append(g.days, d.num)
-			g.names = append(g.names, d.name)
-		} else {
-			groups[key] = &dayTimes{
-				days:  []int{d.num},
-				names: []string{d.name},
-				times: d.day.Times,
+		for i, t := range d.day.Times {
+			action := "in"
+			if i%2 != 0 {
+				action = "out"
+			}
+
+			hour, minute, ok := parseTime(t.Time)
+			if !ok {
+				continue
+			}
+
+			for _, offset := range offsets {
+				utcHour, dayDelta := localToUTC(hour, offset)
+				utcDay := githubWeekday(d.num + dayDelta)
+				key := fmt.Sprintf("%02d:%02d:%d:%d:%s:%s", hour, minute, offset, utcHour, action, t.Time)
+
+				g, ok := groups[key]
+				if !ok {
+					g = &cronGroup{
+						minute:     minute,
+						hour:       utcHour,
+						offset:     offset,
+						action:     action,
+						localTime:  t.Time,
+						localNames: make(map[string]bool),
+						utcDays:    make(map[int]bool),
+					}
+					groups[key] = g
+				}
+				g.localNames[d.name] = true
+				g.utcDays[utcDay] = true
 			}
 		}
 	}
 
-	// Sort groups by key for deterministic output
 	var keys []string
 	for k := range groups {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
+	var entries []CronEntry
 	for _, key := range keys {
 		g := groups[key]
-		daysStr := intSliceJoin(g.days, ",")
-		namesStr := strings.Join(g.names, "-")
-
-		for i, t := range g.times {
-			// Even index = IN, odd index = OUT
-			action := "in"
-			if i%2 != 0 {
-				action = "out"
-			}
-
-			hour, minute := parseTime(t.Time)
-
-			utcHourStd := localToUTC(hour, stdOff)
-			if isDST {
-				utcHourDST := localToUTC(hour, dstOff)
-				if utcHourStd == utcHourDST {
-					cron := fmt.Sprintf("%d %d * * %s", minute, utcHourStd, daysStr)
-					comment := fmt.Sprintf("%s %s (UTC%+d)", namesStr, t.Time, stdOff)
-					entries = append(entries, CronEntry{Cron: cron, Comment: comment, Action: action})
-				} else {
-					h1, h2 := utcHourDST, utcHourStd
-					if h1 > h2 {
-						h1, h2 = h2, h1
-					}
-					cron1 := fmt.Sprintf("%d %d * * %s", minute, h1, daysStr)
-					comment1 := fmt.Sprintf("%s %s (UTC%+d)", namesStr, t.Time, dstOff)
-					entries = append(entries, CronEntry{Cron: cron1, Comment: comment1, Action: action})
-					cron2 := fmt.Sprintf("%d %d * * %s", minute, h2, daysStr)
-					comment2 := fmt.Sprintf("%s %s (UTC%+d)", namesStr, t.Time, stdOff)
-					entries = append(entries, CronEntry{Cron: cron2, Comment: comment2, Action: action})
-				}
-			} else {
-				cron := fmt.Sprintf("%d %d * * %s", minute, utcHourStd, daysStr)
-				comment := fmt.Sprintf("%s %s (UTC%+d)", namesStr, t.Time, stdOff)
-				entries = append(entries, CronEntry{Cron: cron, Comment: comment, Action: action})
-			}
-		}
+		daysStr := intSetJoin(g.utcDays, ",")
+		namesStr := stringSetJoin(g.localNames, "-")
+		cron := fmt.Sprintf("%d %d * * %s", g.minute, g.hour, daysStr)
+		comment := fmt.Sprintf("%s %s (UTC%+d)", namesStr, g.localTime, g.offset)
+		entries = append(entries, CronEntry{Cron: cron, Comment: comment, Action: g.action})
 	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Cron != entries[j].Cron {
+			return entries[i].Cron < entries[j].Cron
+		}
+		if entries[i].Action != entries[j].Action {
+			return entries[i].Action < entries[j].Action
+		}
+		return entries[i].Comment < entries[j].Comment
+	})
 
 	return entries
 }
 
-// localToUTC converts a local hour to UTC given an offset in hours.
-func localToUTC(hour, offsetHours int) int {
+// localToUTC converts a local hour to UTC and returns the UTC day delta.
+func localToUTC(hour, offsetHours int) (utcHour int, dayDelta int) {
 	utc := hour - offsetHours
 	if utc < 0 {
 		utc += 24
+		dayDelta = -1
 	} else if utc >= 24 {
 		utc -= 24
+		dayDelta = 1
 	}
-	return utc
+	return utc, dayDelta
 }
 
 // signTimes collects all unique sign times (HH:MM) from the schedule config.
@@ -145,11 +150,12 @@ func signTimes(schedule config.Schedule) []string {
 	for t := range seen {
 		times = append(times, t)
 	}
+	sort.Strings(times)
 	return times
 }
 
 // GenerateWorkflowYAML generates the auto-sign GitHub Actions workflow.
-// For DST zones, each sign time produces two separate cron entries (one per UTC offset).
+// For DST zones, each sign time produces one cron per UTC offset.
 // A timezone guard verifies the exact local HH:MM at runtime to skip the wrong offset.
 func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) string {
 	// Optional random delay in seconds (default 90)
@@ -164,6 +170,10 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 	for _, c := range crons {
 		cronLines = append(cronLines, fmt.Sprintf("    - cron: '%s'  # %s", c.Cron, c.Comment))
 	}
+	triggerYAML := "on:\n  workflow_dispatch:\n"
+	if len(cronLines) > 0 {
+		triggerYAML = fmt.Sprintf("on:\n  schedule:\n%s\n  workflow_dispatch:\n", strings.Join(cronLines, "\n"))
+	}
 
 	// Resolve IANA timezone for the guard step
 	ianaZone := tz
@@ -174,13 +184,14 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 	// Build the timezone guard step (only for DST zones)
 	guardYAML := ""
 	guardCondition := ""
-	if isDST {
+	if isDST && len(crons) > 0 {
 		times := signTimes(schedule)
 		timesStr := strings.Join(times, " ")
 
 		guardYAML = fmt.Sprintf(`
       - name: Timezone guard
         id: tz
+        if: github.event_name == 'schedule'
         run: |
           CRON_MIN=$(echo "%s" | awk '{print $1}')
           CRON_HOUR=$(echo "%s" | awk '{print $2}')
@@ -224,8 +235,6 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 
 	return fmt.Sprintf(`name: Auto Sign
 
-on:
-  schedule:
 %s
 
 concurrency:
@@ -271,7 +280,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-`, strings.Join(cronLines, "\n"), guardYAML, guardCondition, guardCondition, randomDelay, guardCondition, caseBlock, failureCondition, ianaZone)
+`, triggerYAML, guardYAML, guardCondition, guardCondition, randomDelay, guardCondition, caseBlock, failureCondition, ianaZone)
 }
 
 // GenerateManualWorkflowYAML generates the manual sign workflow.
@@ -391,28 +400,67 @@ func utcOffsets(tz string) (stdOffset, dstOffset int) {
 	return offJan / 3600, offJul / 3600
 }
 
-func parseTime(t string) (hour, minute int) {
+func parseTime(t string) (hour, minute int, ok bool) {
 	parts := strings.Split(t, ":")
 	if len(parts) != 2 {
-		return 0, 0
+		return 0, 0, false
 	}
-	hour, _ = strconv.Atoi(parts[0])
-	minute, _ = strconv.Atoi(parts[1])
-	return
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, false
+	}
+	minute, err = strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, 0, false
+	}
+	return hour, minute, true
 }
 
-func timesKey(times []config.ScheduleEntry) string {
-	var parts []string
-	for _, t := range times {
-		parts = append(parts, t.Time)
+func githubWeekday(day int) int {
+	for day < 0 {
+		day += 7
 	}
-	return strings.Join(parts, ",")
+	return day % 7
 }
 
-func intSliceJoin(ints []int, sep string) string {
+func intSetJoin(ints map[int]bool, sep string) string {
+	values := make([]int, 0, len(ints))
+	for i := range ints {
+		values = append(values, i)
+	}
+	sort.Ints(values)
+
 	var parts []string
-	for _, i := range ints {
+	for _, i := range values {
 		parts = append(parts, strconv.Itoa(i))
 	}
 	return strings.Join(parts, sep)
+}
+
+func stringSetJoin(values map[string]bool, sep string) string {
+	weekdayOrder := []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+	parts := make([]string, 0, len(values))
+	for _, v := range weekdayOrder {
+		if values[v] {
+			parts = append(parts, v)
+		}
+	}
+	for v := range values {
+		if !containsString(weekdayOrder, v) {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, sep)
+}
+
+func containsString(values []string, needle string) bool {
+	for _, v := range values {
+		if v == needle {
+			return true
+		}
+	}
+	return false
 }

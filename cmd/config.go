@@ -101,17 +101,36 @@ var configEditCmd = &cobra.Command{
 		}
 
 		changed := false
+		syncNeeded := false
+		var afterSaveMessage string
+		var syncPassword string
 
 		switch field {
 		case "email":
+			oldEmail := cfg.WoffuEmail
 			err = huh.NewForm(
 				huh.NewGroup(
-					huh.NewInput().Title("Email").Value(&cfg.WoffuEmail),
+					huh.NewInput().
+						Title("Email").
+						Value(&cfg.WoffuEmail).
+						Validate(func(s string) error {
+							if extractCompany(s) == "" {
+								return fmt.Errorf("enter a valid email")
+							}
+							return nil
+						}),
 				),
 			).Run()
-			if err == nil {
+			if err == nil && cfg.WoffuEmail != oldEmail {
 				cfg.WoffuCompanyURL = "https://" + extractCompany(cfg.WoffuEmail) + ".woffu.com"
+				if pw, pwErr := config.GetPassword(oldEmail); pwErr == nil {
+					_ = config.SetPassword(cfg.WoffuEmail, pw)
+				} else {
+					fmt.Printf("  %s Password for the new email was not copied. Update it with %s.\n",
+						sWarn, sBold.Render("woffux config edit"))
+				}
 				changed = true
+				syncNeeded = true
 			}
 
 		case "password":
@@ -122,32 +141,41 @@ var configEditCmd = &cobra.Command{
 				),
 			).Run()
 			if err == nil && pw != "" {
-				config.SetPassword(cfg.WoffuEmail, pw)
+				if err := config.SetPassword(cfg.WoffuEmail, pw); err != nil {
+					return fmt.Errorf("save password: %w", err)
+				}
+				syncPassword = pw
+				syncNeeded = true
 				fmt.Printf("  %s Password updated in keychain\n", sOk)
 			}
 
 		case "office":
-			lat, lon, err := locationPickerWithMap("Office location", 0, 0)
+			lat, lon, err := locationPickerWithMap("Office location", cfg.Latitude, cfg.Longitude)
 			if err == nil {
 				cfg.Latitude = lat
 				cfg.Longitude = lon
 				changed = true
+				syncNeeded = true
 			}
 
 		case "home":
-			lat, lon, err := locationPickerWithMap("Home location", 0, 0)
+			lat, lon, err := locationPickerWithMap("Home location", cfg.HomeLatitude, cfg.HomeLongitude)
 			if err == nil {
 				cfg.HomeLatitude = lat
 				cfg.HomeLongitude = lon
 				changed = true
+				syncNeeded = true
 			}
 
 		case "schedule":
-			schedule, tz, err := scheduleWizard()
+			scheduleResult, err := scheduleWizard()
 			if err == nil {
-				cfg.Schedule = schedule
-				cfg.Timezone = tz
+				err = applyScheduleWizardResult(cfg, scheduleResult)
+			}
+			if err == nil {
 				changed = true
+				syncNeeded = true
+				afterSaveMessage = scheduleWizardSavedPresetMessage(scheduleResult)
 			}
 
 		case "telegram":
@@ -155,6 +183,7 @@ var configEditCmd = &cobra.Command{
 			if err == nil {
 				cfg.Telegram = tgCfg
 				changed = true
+				syncNeeded = true
 			}
 
 		case "github":
@@ -169,54 +198,64 @@ var configEditCmd = &cobra.Command{
 				return fmt.Errorf("save config: %w", err)
 			}
 			fmt.Printf("  %s Config saved locally\n", sOk)
+			if afterSaveMessage != "" {
+				fmt.Print(afterSaveMessage)
+			}
 
-			// Explain sync and offer it
-			if cfg.GithubFork != "" {
-				fmt.Println()
-				fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-					"  Your local config changed. GitHub Actions still uses the old values.\n" +
-						"  Sync pushes your new settings so auto-signing uses them."))
-				fmt.Println()
+		}
 
-				var sync bool
-				huh.NewForm(
-					huh.NewGroup(
-						huh.NewConfirm().
-							Title("Push changes to GitHub now?").
-							Description(fmt.Sprintf("This updates secrets and workflows on %s", cfg.GithubFork)).
-							Affirmative("Sync now").
-							Negative("I'll do it later (woffux sync)").
-							Value(&sync),
-					),
-				).Run()
+		// Explain sync and offer it. Password changes need this too even though
+		// the YAML config file itself does not change.
+		if syncNeeded && cfg.GithubFork != "" {
+			fmt.Println()
+			fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+				"  Your local settings changed. GitHub Actions still uses the old values.\n" +
+					"  Sync pushes your new settings so auto-signing uses them."))
+			fmt.Println()
 
-				if sync {
-					pw, _ := config.GetPassword(cfg.WoffuEmail)
-					var secretsErr, workflowsErr error
-					spinner.New().
-						Title("Syncing to GitHub...").
-						Action(func() {
-							secretsErr = gh.SyncSecrets(cfg, pw)
-							if secretsErr == nil {
-								workflowsErr = gh.SyncWorkflows(cfg)
-							}
-						}).
-						Run()
+			var sync bool
+			if err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Push changes to GitHub now?").
+						Description(fmt.Sprintf("This updates secrets and workflows on %s", cfg.GithubFork)).
+						Affirmative("Sync now").
+						Negative("I'll do it later (woffux sync)").
+						Value(&sync),
+				),
+			).Run(); err != nil {
+				return err
+			}
 
-					if secretsErr != nil {
-						fmt.Printf("  %s Secrets failed: %s\n", sWarn, secretsErr)
-					} else if workflowsErr != nil {
-						fmt.Printf("  %s Secrets synced, but workflows failed: %s\n", sWarn, workflowsErr)
-					} else {
-						fmt.Printf("  %s GitHub synced — auto-signing will use your new settings\n", sOk)
-					}
-				} else {
-					fmt.Printf("\n  %s Remember to run %s when you're ready.\n",
-						lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"),
-						lipgloss.NewStyle().Bold(true).Render("woffux sync"))
-					fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-						"  Until then, auto-signing uses the previous settings."))
+			if sync {
+				if err := checkGhInstalled(); err != nil {
+					return err
 				}
+				if syncPassword == "" {
+					pw, err := config.GetPassword(cfg.WoffuEmail)
+					if err != nil {
+						return fmt.Errorf("get password for sync: %w", err)
+					}
+					syncPassword = pw
+				}
+
+				var syncErr error
+				spinner.New().
+					Title("Syncing to GitHub...").
+					Action(func() { syncErr = syncGitHubConfig(cfg, syncPassword) }).
+					Run()
+
+				if syncErr != nil {
+					fmt.Printf("  %s GitHub sync failed: %s\n", sWarn, syncErr)
+				} else {
+					fmt.Printf("  %s GitHub synced — auto-signing will use your new settings\n", sOk)
+				}
+			} else {
+				fmt.Printf("\n  %s Remember to run %s when you're ready.\n",
+					lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"),
+					lipgloss.NewStyle().Bold(true).Render("woffux sync"))
+				fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
+					"  Until then, auto-signing uses the previous settings."))
 			}
 		}
 
@@ -229,20 +268,15 @@ func init() {
 }
 
 func scheduleSummary(s config.Schedule) string {
-	count := 0
-	for _, d := range []config.DaySchedule{s.Monday, s.Tuesday, s.Wednesday, s.Thursday, s.Friday} {
-		if d.Enabled {
-			count++
-		}
-	}
-	if count == 0 {
+	days, signs := scheduleStats(s)
+	if days == 0 {
 		return "all days off"
 	}
-	times := 0
-	if s.Monday.Enabled {
-		times = len(s.Monday.Times)
+	dayLabel := "days"
+	if days == 1 {
+		dayLabel = "day"
 	}
-	return fmt.Sprintf("%d days, %d signs/day", count, times)
+	return fmt.Sprintf("%d %s, %d signs", days, dayLabel, signs)
 }
 
 func telegramSummary(t config.TelegramConfig) string {
@@ -251,4 +285,3 @@ func telegramSummary(t config.TelegramConfig) string {
 	}
 	return "not configured"
 }
-

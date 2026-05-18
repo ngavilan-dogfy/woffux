@@ -77,7 +77,7 @@ var autoOffCmd = &cobra.Command{
 		}
 
 		var confirm bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Disable auto-signing?").
@@ -86,7 +86,9 @@ var autoOffCmd = &cobra.Command{
 					Negative("Cancel").
 					Value(&confirm),
 			),
-		).Run()
+		).Run(); err != nil {
+			return err
+		}
 
 		if !confirm {
 			return nil

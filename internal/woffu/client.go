@@ -17,8 +17,9 @@ type Client struct {
 }
 
 func NewWoffuClient(baseURL string) *Client {
+	baseURL = strings.TrimRight(baseURL, "/")
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
+		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
@@ -34,8 +35,9 @@ func NewWoffuClient(baseURL string) *Client {
 }
 
 func NewCompanyClient(companyURL string) *Client {
+	companyURL = strings.TrimRight(companyURL, "/")
 	return &Client{
-		baseURL:    strings.TrimRight(companyURL, "/"),
+		baseURL:    companyURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
@@ -141,6 +143,7 @@ func (c *Client) doRaw(opts requestOptions) (*http.Response, error) {
 
 	// Use a separate client that doesn't follow redirects
 	noRedirectClient := &http.Client{
+		Timeout: c.httpClient.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

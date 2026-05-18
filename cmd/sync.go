@@ -83,17 +83,9 @@ This command makes GitHub match it.`,
 		if workflowsErr != nil {
 			fmt.Printf("  %s %s%s\n", sErrIcon.Render("✗"), sLabel.Render("Workflows"), workflowsErr)
 		} else {
-			// Count enabled days and signs
-			days := 0
-			signs := 0
-			for _, d := range []config.DaySchedule{cfg.Schedule.Monday, cfg.Schedule.Tuesday, cfg.Schedule.Wednesday, cfg.Schedule.Thursday, cfg.Schedule.Friday} {
-				if d.Enabled {
-					days++
-					signs += len(d.Times)
-				}
-			}
+			days, signs := scheduleStats(cfg.Schedule)
 			fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Workflows"),
-				lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(fmt.Sprintf("%d days, %d signs/day, tz=%s", days, signs/days, cfg.Timezone)))
+				lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(fmt.Sprintf("%d days, %d signs, tz=%s", days, signs, cfg.Timezone)))
 		}
 
 		// Step 3: Reload cron triggers (disable + re-enable workflow)
@@ -124,4 +116,27 @@ This command makes GitHub match it.`,
 
 		return nil
 	},
+}
+
+func syncGitHubConfig(cfg *config.Config, password string) error {
+	if cfg.GithubFork == "" {
+		return fmt.Errorf("no github fork configured — run 'woffux setup' first")
+	}
+	if err := gh.SyncSecrets(cfg, password); err != nil {
+		return fmt.Errorf("sync secrets: %w", err)
+	}
+	if err := gh.SyncWorkflows(cfg); err != nil {
+		return fmt.Errorf("sync workflows: %w", err)
+	}
+	return nil
+}
+
+func scheduleStats(s config.Schedule) (days, signs int) {
+	for _, d := range []config.DaySchedule{s.Monday, s.Tuesday, s.Wednesday, s.Thursday, s.Friday} {
+		if d.Enabled {
+			days++
+			signs += len(d.Times)
+		}
+	}
+	return days, signs
 }

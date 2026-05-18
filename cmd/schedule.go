@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
@@ -47,14 +48,13 @@ var scheduleEditCmd = &cobra.Command{
 			return err
 		}
 
-		schedule, tz, err := scheduleWizard()
+		scheduleResult, err := scheduleWizard()
 		if err != nil {
 			return err
 		}
 
-		cfg.Schedule = schedule
-		if tz != "" {
-			cfg.Timezone = tz
+		if err := applyScheduleWizardResult(cfg, scheduleResult); err != nil {
+			return err
 		}
 
 		if err := config.Save(cfg); err != nil {
@@ -62,9 +62,29 @@ var scheduleEditCmd = &cobra.Command{
 		}
 
 		fmt.Printf("  %s Schedule saved!\n", sOk)
+		if msg := scheduleWizardSavedPresetMessage(scheduleResult); msg != "" {
+			fmt.Print(msg)
+		}
 
-		// Sync workflows automatically
+		// Offer to sync workflows when GitHub is configured.
 		if cfg.GithubFork != "" {
+			var push bool
+			if err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title(fmt.Sprintf("Push to %s?", cfg.GithubFork)).
+						Affirmative("Yes").
+						Negative("Skip").
+						Value(&push),
+				),
+			).Run(); err != nil {
+				return err
+			}
+
+			if !push {
+				return nil
+			}
+
 			var pushErr error
 			spinner.New().
 				Title("Pushing workflows...").
@@ -101,6 +121,9 @@ var schedulePushCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if cfg.GithubFork == "" {
+			return fmt.Errorf("no github fork configured — run 'woffux setup' first")
+		}
 
 		var pushErr error
 		spinner.New().
@@ -134,7 +157,8 @@ var scheduleListCmd = &cobra.Command{
 		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
 		sActive := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
 
-		for name, s := range cfg.SavedSchedules {
+		for _, name := range cfg.SchedulePresetNames() {
+			s := cfg.SavedSchedules[name]
 			label := sBold.Render(name)
 			if name == cfg.ActiveSchedule {
 				label += sActive.Render(" (active)")
@@ -157,8 +181,10 @@ var scheduleSaveCmd = &cobra.Command{
 			return err
 		}
 
-		name := args[0]
-		cfg.SaveSchedulePreset(name, cfg.Schedule)
+		name := config.NormalizePresetName(args[0])
+		if err := cfg.SaveSchedulePreset(name, cfg.Schedule); err != nil {
+			return err
+		}
 		cfg.ActiveSchedule = name
 
 		if err := config.Save(cfg); err != nil {
@@ -180,7 +206,7 @@ var scheduleLoadCmd = &cobra.Command{
 			return err
 		}
 
-		name := args[0]
+		name := config.NormalizePresetName(args[0])
 		if !cfg.LoadSchedulePreset(name) {
 			return fmt.Errorf("preset \"%s\" not found. Use 'woffux schedule list' to see available presets", name)
 		}
@@ -236,7 +262,7 @@ var scheduleDeleteCmd = &cobra.Command{
 			return err
 		}
 
-		name := args[0]
+		name := config.NormalizePresetName(args[0])
 		if _, ok := cfg.SavedSchedules[name]; !ok {
 			return fmt.Errorf("preset \"%s\" not found", name)
 		}

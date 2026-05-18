@@ -52,7 +52,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		var confirm bool
-		huh.NewForm(
+		if err := huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Update to %s?", latestTag)).
@@ -60,7 +60,9 @@ var updateCmd = &cobra.Command{
 					Negative("Cancel").
 					Value(&confirm),
 			),
-		).Run()
+		).Run(); err != nil {
+			return err
+		}
 
 		if !confirm {
 			return nil
