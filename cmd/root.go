@@ -50,7 +50,7 @@ Configuration:
   woffux config edit         Change any individual setting
   woffux schedule edit       Edit schedule and push to GitHub
   woffux sync                Re-sync secrets + workflows
-  woffux update              Update to latest version
+  woffux update              Update to latest version (alias: upgrade)
 
 Output modes (on most commands):
   --json                     Structured JSON for scripting

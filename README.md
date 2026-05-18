@@ -93,6 +93,8 @@ Then: `gh auth login`
 
 ```bash
 woffux update
+# or
+woffux upgrade
 ```
 
 ## Setup
@@ -181,7 +183,7 @@ All set!
 | `woffux schedule delete <name>` | Delete a saved preset |
 | `woffux schedule push` | Push schedule to GitHub workflows |
 | `woffux sync` | Push local config to GitHub |
-| `woffux update` | Update to latest version |
+| `woffux update` / `woffux upgrade` | Update to latest version |
 | `woffux --version` | Show current version |
 
 ## Output modes
