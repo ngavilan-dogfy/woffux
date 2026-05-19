@@ -63,9 +63,11 @@ type execDoneMsg struct {
 // ── Action items for the overlay menu ──
 
 type action struct {
-	key  string
-	name string
-	desc string
+	key      string
+	name     string
+	desc     string
+	current  bool
+	disabled bool
 }
 
 // ── Overlay kinds ──
@@ -333,25 +335,16 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ── Overlay: action menu ──
 	if d.overlay == overlayMenu {
 		actions := d.getActions()
+		d.menuCursor = clampActionCursor(actions, d.menuCursor)
 		switch key {
 		case "esc", "q":
 			d.overlay = overlayNone
 		case "up", "k":
-			for next := d.menuCursor - 1; next >= 0; next-- {
-				if actions[next].key != "---" && actions[next].key != "preset-active" {
-					d.menuCursor = next
-					break
-				}
-			}
+			d.menuCursor = moveActionCursor(actions, d.menuCursor, -1)
 		case "down", "j":
-			for next := d.menuCursor + 1; next < len(actions); next++ {
-				if actions[next].key != "---" && actions[next].key != "preset-active" {
-					d.menuCursor = next
-					break
-				}
-			}
+			d.menuCursor = moveActionCursor(actions, d.menuCursor, 1)
 		case "enter":
-			if actions[d.menuCursor].key != "---" && actions[d.menuCursor].key != "preset-active" {
+			if isSelectableAction(actions[d.menuCursor]) {
 				d.overlay = overlayNone
 				return d, d.executeAction(actions[d.menuCursor])
 			}
@@ -454,7 +447,7 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Actions
 	case "enter":
 		d.overlay = overlayMenu
-		d.menuCursor = 0
+		d.menuCursor = firstSelectableAction(d.getActions())
 	case "s":
 		return d, d.trySign()
 	case "a":
@@ -940,12 +933,19 @@ func (d *Dashboard) getActions() []action {
 		{key: "sign", name: "Sign now", desc: "Clock in/out"},
 	}
 
-	if d.autoActive != nil {
-		if *d.autoActive {
-			actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: ""})
-		} else {
-			actions = append(actions, action{key: "auto-on", name: "Enable auto-sign", desc: ""})
-		}
+	switch {
+	case d.cfg.GithubFork == "":
+		actions = append(actions, action{
+			key: "auto-unavailable", name: "Auto-sign unavailable", desc: "run setup first", disabled: true,
+		})
+	case d.autoActive == nil:
+		actions = append(actions, action{
+			key: "auto-checking", name: "Checking auto-sign", desc: d.cfg.GithubFork, disabled: true,
+		})
+	case *d.autoActive:
+		actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: "Pause scheduled signing"})
+	default:
+		actions = append(actions, action{key: "auto-on", name: "Enable auto-sign", desc: "Sync and refresh cron triggers"})
 	}
 
 	// Schedule section
@@ -953,29 +953,96 @@ func (d *Dashboard) getActions() []action {
 
 	if d.cfg.SavedSchedules != nil && len(d.cfg.SavedSchedules) > 0 {
 		for _, name := range d.cfg.SchedulePresetNames() {
-			label := fmt.Sprintf("Switch to \"%s\" schedule", name)
-			desc := "Apply saved schedule preset"
+			desc := "Apply schedule preset"
 			if name == d.cfg.ActiveSchedule {
-				label += " (current)"
-				desc = "Re-apply current schedule preset"
+				desc = "Current schedule"
 			}
-			actions = append(actions, action{key: "preset:" + name, name: label, desc: desc})
+			actions = append(actions, action{
+				key:     "preset:" + name,
+				name:    name,
+				desc:    desc,
+				current: name == d.cfg.ActiveSchedule,
+			})
 		}
+	} else {
+		actions = append(actions, action{
+			key: "no-presets", name: "No saved presets", desc: "save current schedule below", disabled: true,
+		})
 	}
 
 	actions = append(actions,
 		action{key: "save-preset", name: "Save as preset", desc: "Save current schedule with a name"},
 		action{key: "edit-schedule", name: "Edit schedule", desc: "Change auto-sign times"},
 		action{key: "edit-config", name: "Edit settings", desc: "Change credentials, coordinates, Telegram, schedule"},
-		action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"},
-		action{key: "open", name: "Open Woffu", desc: "Open Woffu in browser"},
-		action{key: "open-gh", name: "Open GitHub fork", desc: "View fork and workflow runs"},
 	)
+
+	actions = append(actions, action{key: "---", name: "Tools", desc: ""})
+
+	if d.cfg.GithubFork == "" {
+		actions = append(actions, action{key: "sync-unavailable", name: "Sync to GitHub", desc: "run setup first", disabled: true})
+	} else {
+		actions = append(actions, action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"})
+	}
+
+	if strings.TrimSpace(d.cfg.WoffuCompanyURL) == "" {
+		actions = append(actions, action{key: "open-unavailable", name: "Open Woffu", desc: "missing Woffu URL", disabled: true})
+	} else {
+		actions = append(actions, action{key: "open", name: "Open Woffu", desc: "Open Woffu in browser"})
+	}
+	if d.cfg.GithubFork == "" {
+		actions = append(actions, action{key: "open-gh-unavailable", name: "Open GitHub Actions", desc: "run setup first", disabled: true})
+	} else {
+		actions = append(actions, action{key: "open-gh", name: "Open GitHub Actions", desc: "View workflow runs"})
+	}
 
 	return actions
 }
 
+func isSelectableAction(a action) bool {
+	return a.key != "---" && !a.disabled && !a.current
+}
+
+func firstSelectableAction(actions []action) int {
+	for i, a := range actions {
+		if isSelectableAction(a) {
+			return i
+		}
+	}
+	return 0
+}
+
+func clampActionCursor(actions []action, cursor int) int {
+	if len(actions) == 0 {
+		return 0
+	}
+	if cursor < 0 || cursor >= len(actions) || !isSelectableAction(actions[cursor]) {
+		return firstSelectableAction(actions)
+	}
+	return cursor
+}
+
+func moveActionCursor(actions []action, cursor, delta int) int {
+	if len(actions) == 0 {
+		return 0
+	}
+	cursor = clampActionCursor(actions, cursor)
+	for step := 1; step <= len(actions); step++ {
+		next := (cursor + delta*step) % len(actions)
+		if next < 0 {
+			next += len(actions)
+		}
+		if isSelectableAction(actions[next]) {
+			return next
+		}
+	}
+	return cursor
+}
+
 func (d *Dashboard) executeAction(a action) tea.Cmd {
+	if !isSelectableAction(a) {
+		return nil
+	}
+
 	switch a.key {
 	case "sign":
 		return d.trySign()
@@ -987,6 +1054,10 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 		return d.editSchedule()
 	case "edit-config":
 		return d.editConfig()
+	case "save-preset":
+		d.presetInput = ""
+		d.overlay = overlaySavePreset
+		return nil
 	case "sync":
 		return d.syncGitHub()
 	case "open":
@@ -1015,40 +1086,32 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 
 func (d *Dashboard) renderOverlayMenu() string {
 	actions := d.getActions()
+	d.menuCursor = clampActionCursor(actions, d.menuCursor)
+	innerWidth := overlayMenuInnerWidth(d.width)
 
 	// Title bar
-	titleBar := sOverlayTitle.Width(36).Render("\u25C6 Actions") // ◆
+	titleBar := sOverlayTitle.Width(innerWidth).Render("\u25C6 Actions") // ◆
 
 	var rows []string
 	for i, a := range actions {
 		if a.key == "---" {
-			// Section separator: full-width label with subtle background
 			sepLabel := lipgloss.NewStyle().
 				Foreground(colorAccent).
 				Bold(true).
 				Render("  " + a.name)
 			sepLine := lipgloss.NewStyle().
 				Foreground(colorSeparator).
-				Render(strings.Repeat("\u2500", 32)) // ─
+				Render(strings.Repeat("\u2500", innerWidth)) // ─
 			rows = append(rows, "\n"+sepLine+"\n"+sepLabel)
 			continue
 		}
-		if a.key == "preset-active" {
-			// Active preset: shown as dimmed, not selectable
-			rows = append(rows, sDimmed.Render("  "+a.name+"  "+sSuccess.Render("\u2713"))) // ✓
-		} else if i == d.menuCursor {
-			// Active item: highlighted background with arrow
-			row := sMenuItemActive.Render("\u25B8 " + a.name) // ▸
-			rows = append(rows, row)
-		} else {
-			// Normal item
-			rows = append(rows, sMenuItem.Render("  "+a.name))
-		}
+		rows = append(rows, renderMenuActionRow(a, i == d.menuCursor, innerWidth))
 	}
 
 	helpLine := "\n" + lipgloss.NewStyle().
 		Foreground(colorDim).
 		Padding(0, 2).
+		Width(innerWidth).
 		Render("\u2191\u2193 navigate  \u23CE select  esc close") // ↑↓ ⏎
 
 	menuContent := titleBar + "\n" + strings.Join(rows, "\n") + helpLine
@@ -1060,6 +1123,67 @@ func (d *Dashboard) renderOverlayMenu() string {
 		Render(menuContent)
 
 	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, menuBox)
+}
+
+func overlayMenuInnerWidth(screenWidth int) int {
+	width := 64
+	if screenWidth > 0 && screenWidth-8 < width {
+		width = screenWidth - 8
+	}
+	if width < 42 {
+		width = 42
+	}
+	return width
+}
+
+func renderMenuActionRow(a action, active bool, width int) string {
+	prefix := "  "
+	if active {
+		prefix = "\u25B8 " // ▸
+	}
+
+	name := a.name
+	if a.current {
+		name = "\u2713 " + name // ✓
+	}
+
+	rowText := prefix + name
+	if a.desc != "" {
+		rowText += "  \u00B7 " + a.desc // ·
+	}
+	rowText = truncatePlainToWidth(rowText, width)
+
+	style := lipgloss.NewStyle().Width(width)
+	switch {
+	case active:
+		style = style.Foreground(colorText).Bold(true).Background(lipgloss.Color("#374151"))
+	case a.disabled:
+		style = style.Foreground(colorDim)
+	case a.current:
+		style = style.Foreground(colorText)
+	default:
+		style = style.Foreground(colorText)
+	}
+
+	return style.Render(rowText)
+}
+
+func truncatePlainToWidth(value string, width int) string {
+	if lipgloss.Width(value) <= width {
+		return value
+	}
+	if width <= 1 {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range value {
+		next := b.String() + string(r)
+		if lipgloss.Width(next)+1 > width {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String() + "\u2026" // …
 }
 
 // ── Commands ──
@@ -1275,8 +1399,8 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 			return errMsg{fmt.Errorf("sync workflows: %w", err)}
 		}
 		// Force GitHub to reload cron triggers
-		if d.cfg.GithubFork != "" {
-			if err := gh.ReloadAutoSign(d.cfg.GithubFork); err != nil {
+		if cfg.GithubFork != "" {
+			if err := gh.ReloadAutoSign(cfg.GithubFork); err != nil {
 				return errMsg{fmt.Errorf("reload auto-sign: %w", err)}
 			}
 		}
