@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +17,16 @@ import (
 
 var signForce bool
 var signExpected string
+var signCatchUpSpec string
+var signCatchUpTimezone string
+var signCatchUpWindow time.Duration
+
+type catchUpEvent struct {
+	day    int
+	minute int
+	action woffu.SignAction
+	label  string
+}
 
 var signCmd = &cobra.Command{
 	Use:   "sign",
@@ -77,11 +89,61 @@ In CI, reads credentials from environment variables.`,
 			return nil
 		}
 
-		// Guard: check if sign should be skipped based on expected action
-		if expectedAction != "" {
-			slots, slotsErr := woffu.GetTodaySlots(companyClient, token)
+		var slots []woffu.SignSlot
+		slotsLoaded := false
+		loadSlots := func() error {
+			if slotsLoaded {
+				return nil
+			}
+			var slotsErr error
+			slots, slotsErr = woffu.GetTodaySlots(companyClient, token)
 			if slotsErr != nil {
 				return fmt.Errorf("get slots: %w", slotsErr)
+			}
+			slotsLoaded = true
+			return nil
+		}
+
+		if strings.TrimSpace(signCatchUpSpec) != "" {
+			if err := loadSlots(); err != nil {
+				return err
+			}
+			tz := strings.TrimSpace(signCatchUpTimezone)
+			if tz == "" {
+				tz = cfg.Timezone
+			}
+			loc, err := time.LoadLocation(tz)
+			if err != nil {
+				loc = time.Local
+			}
+			window := signCatchUpWindow
+			if window <= 0 {
+				window = 2 * time.Hour
+			}
+			action, matchedTime, ok, err := resolveCatchUpSignAction(signCatchUpSpec, slots, time.Now().In(loc), window)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				reason := "No overdue scheduled sign"
+				if isTTY() {
+					fmt.Printf("%s — skipping.\n", reason)
+				} else {
+					fmt.Printf("SKIP %s %s\n", info.Date, reason)
+				}
+				_ = notify.SendSkippedNotification(telegramCfg, info.Date, reason)
+				return nil
+			}
+			expectedAction = action
+			if isTTY() {
+				fmt.Printf("Catch-up matched %s %s.\n", matchedTime, action)
+			}
+		}
+
+		// Guard: check if sign should be skipped based on expected action
+		if expectedAction != "" {
+			if err := loadSlots(); err != nil {
+				return err
 			}
 			if woffu.ShouldSkipSign(slots, expectedAction) {
 				reason := fmt.Sprintf("Already signed %s", expectedAction)
@@ -122,6 +184,9 @@ In CI, reads credentials from environment variables.`,
 func init() {
 	signCmd.Flags().BoolVar(&signForce, "force", false, "Sign even if not a working day")
 	signCmd.Flags().StringVar(&signExpected, "expected", "", "Expected sign action: 'in' or 'out'. Skips if already in that state.")
+	signCmd.Flags().StringVar(&signCatchUpSpec, "catch-up", "", "Scheduled catch-up spec: day:HH:MM:action entries separated by semicolons.")
+	signCmd.Flags().StringVar(&signCatchUpTimezone, "catch-up-timezone", "", "Timezone used to resolve catch-up schedules.")
+	signCmd.Flags().DurationVar(&signCatchUpWindow, "catch-up-window", 2*time.Hour, "How long after a scheduled sign catch-up may run.")
 }
 
 func parseExpectedSignAction(value string) (woffu.SignAction, error) {
@@ -136,6 +201,90 @@ func parseExpectedSignAction(value string) (woffu.SignAction, error) {
 	default:
 		return "", fmt.Errorf("invalid --expected value %q (use \"in\" or \"out\")", value)
 	}
+}
+
+func resolveCatchUpSignAction(spec string, slots []woffu.SignSlot, now time.Time, window time.Duration) (woffu.SignAction, string, bool, error) {
+	events, err := parseCatchUpSpec(spec)
+	if err != nil {
+		return "", "", false, err
+	}
+	if window <= 0 {
+		return "", "", false, fmt.Errorf("catch-up window must be positive")
+	}
+
+	want := woffu.SignActionIn
+	if woffu.IsSignedIn(slots) {
+		want = woffu.SignActionOut
+	}
+
+	day := int(now.Weekday())
+	if day == 0 {
+		day = 7
+	}
+	nowMinute := now.Hour()*60 + now.Minute()
+	bestDelta := int(window/time.Minute) + 1
+	var best catchUpEvent
+	found := false
+
+	for _, event := range events {
+		if event.day != day || event.action != want {
+			continue
+		}
+		delta := nowMinute - event.minute
+		if delta < 0 || time.Duration(delta)*time.Minute > window {
+			continue
+		}
+		if delta < bestDelta {
+			bestDelta = delta
+			best = event
+			found = true
+		}
+	}
+
+	if !found {
+		return "", "", false, nil
+	}
+	return best.action, best.label, true, nil
+}
+
+func parseCatchUpSpec(spec string) ([]catchUpEvent, error) {
+	var events []catchUpEvent
+	for _, raw := range strings.Split(spec, ";") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		parts := strings.Split(raw, ":")
+		if len(parts) != 4 {
+			return nil, fmt.Errorf("invalid catch-up entry %q", raw)
+		}
+		day, err := strconv.Atoi(parts[0])
+		if err != nil || day < 1 || day > 7 {
+			return nil, fmt.Errorf("invalid catch-up day %q", parts[0])
+		}
+		hour, err := strconv.Atoi(parts[1])
+		if err != nil || hour < 0 || hour > 23 {
+			return nil, fmt.Errorf("invalid catch-up hour %q", parts[1])
+		}
+		minute, err := strconv.Atoi(parts[2])
+		if err != nil || minute < 0 || minute > 59 {
+			return nil, fmt.Errorf("invalid catch-up minute %q", parts[2])
+		}
+		action, err := parseExpectedSignAction(parts[3])
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, catchUpEvent{
+			day:    day,
+			minute: hour*60 + minute,
+			action: action,
+			label:  fmt.Sprintf("%02d:%02d", hour, minute),
+		})
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("catch-up spec cannot be empty")
+	}
+	return events, nil
 }
 
 // readStdinLines reads non-empty lines from stdin (for batch piping).

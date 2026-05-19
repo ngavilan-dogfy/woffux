@@ -229,17 +229,17 @@ func TestHasDST(t *testing.T) {
 	}
 }
 
-func TestGenerateWorkflowYAML_ContainsGuard(t *testing.T) {
+func TestGenerateWorkflowYAML_ContainsCatchUpSchedule(t *testing.T) {
 	yaml := GenerateWorkflowYAML(standardSchedule(), "CET")
 
-	if !strings.Contains(yaml, "Timezone guard") {
-		t.Error("DST workflow should contain timezone guard step")
+	if !strings.Contains(yaml, "catch-up every 15m") {
+		t.Error("workflow should contain periodic catch-up cron entries")
 	}
-	if !strings.Contains(yaml, "CRON_MIN") {
-		t.Error("guard should extract CRON_MIN")
+	if !strings.Contains(yaml, "--catch-up '") {
+		t.Error("workflow should call sign catch-up mode")
 	}
-	if !strings.Contains(yaml, `printf "%02d:%02d"`) {
-		t.Error("guard should format HH:MM with printf")
+	if !strings.Contains(yaml, "--catch-up-window '2h'") {
+		t.Error("workflow should use a bounded catch-up window")
 	}
 	if strings.Contains(yaml, ",7 * *") {
 		t.Error("DST workflow should not generate comma-separated UTC hours")
@@ -277,22 +277,20 @@ func TestGenerateWorkflowYAML_ValidBashSyntax(t *testing.T) {
 	}
 }
 
-func TestGenerateWorkflowYAML_ContainsExpectedGuard(t *testing.T) {
+func TestGenerateWorkflowYAML_ContainsCatchUpSpec(t *testing.T) {
 	yaml := GenerateWorkflowYAML(standardSchedule(), "CET")
 
-	// Should contain the case statement for --expected flag
-	if !strings.Contains(yaml, `--expected "$EXPECTED"`) {
-		t.Error("workflow should pass --expected flag to woffux sign")
+	if !strings.Contains(yaml, "1:08:30:in") {
+		t.Error("workflow should encode Monday IN catch-up event")
 	}
-	if !strings.Contains(yaml, `case "$CRON" in`) {
-		t.Error("workflow should contain case statement for cron→action mapping")
+	if !strings.Contains(yaml, "1:13:30:out") {
+		t.Error("workflow should encode Monday OUT catch-up event")
 	}
-	// Check that IN and OUT actions are both present
-	if !strings.Contains(yaml, `EXPECTED="in"`) {
-		t.Error("workflow should map some crons to 'in' action")
+	if !strings.Contains(yaml, "--catch-up-timezone 'Europe/Madrid'") {
+		t.Error("workflow should pass resolved IANA timezone")
 	}
-	if !strings.Contains(yaml, `EXPECTED="out"`) {
-		t.Error("workflow should map some crons to 'out' action")
+	if strings.Contains(yaml, `case "$CRON" in`) {
+		t.Error("workflow should no longer rely on exact cron case mapping")
 	}
 }
 
@@ -316,5 +314,31 @@ func TestGenerateCrons_ActionField(t *testing.T) {
 		if got[comment] != action {
 			t.Errorf("%s action = %q, want %q", comment, got[comment], action)
 		}
+	}
+}
+
+func TestGenerateCatchUpCrons(t *testing.T) {
+	crons := GenerateCatchUpCrons(standardSchedule(), "CET", catchUpWindowMinutes)
+	if len(crons) == 0 {
+		t.Fatal("expected catch-up crons")
+	}
+
+	var sawCET, sawCEST bool
+	for _, cron := range crons {
+		if cron.Action != "catch-up" {
+			t.Fatalf("unexpected action: %#v", cron)
+		}
+		if strings.Contains(cron.Comment, "UTC+1") {
+			sawCET = true
+		}
+		if strings.Contains(cron.Comment, "UTC+2") {
+			sawCEST = true
+		}
+		if !strings.HasPrefix(cron.Cron, "7,22,37,52 ") {
+			t.Fatalf("catch-up cron should run offset from exact sign minutes: %#v", cron)
+		}
+	}
+	if !sawCET || !sawCEST {
+		t.Fatalf("expected both DST offsets, got %#v", crons)
 	}
 }

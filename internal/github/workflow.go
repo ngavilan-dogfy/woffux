@@ -17,6 +17,8 @@ type CronEntry struct {
 	Action  string // "in" or "out" (even index = in, odd index = out)
 }
 
+const catchUpWindowMinutes = 120
+
 // GenerateCrons converts the schedule config into GitHub Actions cron expressions.
 // For DST timezones, it emits one cron per UTC offset. The workflow guard then
 // skips the offset that is not active, without relying on comma-separated hours.
@@ -154,9 +156,148 @@ func signTimes(schedule config.Schedule) []string {
 	return times
 }
 
+type scheduleEvent struct {
+	day    int
+	time   string
+	minute int
+	action string
+}
+
+func scheduleEvents(schedule config.Schedule) []scheduleEvent {
+	type scheduledDay struct {
+		day config.DaySchedule
+		num int
+	}
+	allDays := []scheduledDay{
+		{schedule.Monday, 1},
+		{schedule.Tuesday, 2},
+		{schedule.Wednesday, 3},
+		{schedule.Thursday, 4},
+		{schedule.Friday, 5},
+	}
+
+	var events []scheduleEvent
+	for _, d := range allDays {
+		if !d.day.Enabled {
+			continue
+		}
+		for i, t := range d.day.Times {
+			hour, minute, ok := parseTime(t.Time)
+			if !ok {
+				continue
+			}
+			action := "in"
+			if i%2 != 0 {
+				action = "out"
+			}
+			events = append(events, scheduleEvent{
+				day:    d.num,
+				time:   t.Time,
+				minute: hour*60 + minute,
+				action: action,
+			})
+		}
+	}
+	sort.SliceStable(events, func(i, j int) bool {
+		if events[i].day != events[j].day {
+			return events[i].day < events[j].day
+		}
+		return events[i].minute < events[j].minute
+	})
+	return events
+}
+
+func catchUpSpec(schedule config.Schedule) string {
+	events := scheduleEvents(schedule)
+	parts := make([]string, 0, len(events))
+	for _, event := range events {
+		parts = append(parts, fmt.Sprintf("%d:%s:%s", event.day, event.time, event.action))
+	}
+	return strings.Join(parts, ";")
+}
+
+// GenerateCatchUpCrons emits periodic watchdog schedules. They let a missed
+// exact GitHub cron recover shortly after the configured sign time.
+func GenerateCatchUpCrons(schedule config.Schedule, tz string, windowMinutes int) []CronEntry {
+	events := scheduleEvents(schedule)
+	if len(events) == 0 {
+		return nil
+	}
+	if windowMinutes <= 0 {
+		windowMinutes = catchUpWindowMinutes
+	}
+
+	minMinute := events[0].minute
+	maxMinute := events[0].minute
+	days := make(map[int]bool)
+	for _, event := range events {
+		if event.minute < minMinute {
+			minMinute = event.minute
+		}
+		if event.minute > maxMinute {
+			maxMinute = event.minute
+		}
+		days[event.day] = true
+	}
+	maxMinute += windowMinutes
+	if maxMinute > 23*60+59 {
+		maxMinute = 23*60 + 59
+	}
+
+	stdOff, dstOff := utcOffsets(tz)
+	offsets := []int{stdOff}
+	if dstOff != stdOff {
+		offsets = append(offsets, dstOff)
+	}
+
+	type group struct {
+		offset  int
+		hours   map[int]bool
+		utcDays map[int]bool
+	}
+	groups := make(map[string]*group)
+	startHour := minMinute / 60
+	endHour := maxMinute / 60
+	for _, offset := range offsets {
+		for localHour := startHour; localHour <= endHour; localHour++ {
+			utcHour, dayDelta := localToUTC(localHour, offset)
+			utcDays := make(map[int]bool)
+			for day := range days {
+				utcDays[githubWeekday(day+dayDelta)] = true
+			}
+			daysStr := intSetJoin(utcDays, ",")
+			key := fmt.Sprintf("%d:%s", offset, daysStr)
+			g, ok := groups[key]
+			if !ok {
+				g = &group{offset: offset, hours: make(map[int]bool), utcDays: utcDays}
+				groups[key] = g
+			}
+			g.hours[utcHour] = true
+		}
+	}
+
+	var keys []string
+	for key := range groups {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var entries []CronEntry
+	for _, key := range keys {
+		g := groups[key]
+		hours := intSetRanges(g.hours)
+		daysStr := intSetJoin(g.utcDays, ",")
+		cron := fmt.Sprintf("7,22,37,52 %s * * %s", hours, daysStr)
+		comment := fmt.Sprintf("catch-up every 15m (UTC%+d)", g.offset)
+		entries = append(entries, CronEntry{Cron: cron, Comment: comment, Action: "catch-up"})
+	}
+	return entries
+}
+
 // GenerateWorkflowYAML generates the auto-sign GitHub Actions workflow.
-// For DST zones, each sign time produces one cron per UTC offset.
-// A timezone guard verifies the exact local HH:MM at runtime to skip the wrong offset.
+// For DST zones, each sign time produces one cron per UTC offset. The sign
+// command resolves the local schedule at runtime, so delayed and duplicate
+// offset runs either catch up safely or skip.
 func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) string {
 	// Optional random delay in seconds (default 90)
 	randomDelay := 90
@@ -164,10 +305,13 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 		randomDelay = opts[0]
 	}
 	crons := GenerateCrons(schedule, tz)
-	isDST := hasDST(tz)
+	catchUpCrons := GenerateCatchUpCrons(schedule, tz, catchUpWindowMinutes)
 
 	var cronLines []string
 	for _, c := range crons {
+		cronLines = append(cronLines, fmt.Sprintf("    - cron: '%s'  # %s", c.Cron, c.Comment))
+	}
+	for _, c := range catchUpCrons {
 		cronLines = append(cronLines, fmt.Sprintf("    - cron: '%s'  # %s", c.Cron, c.Comment))
 	}
 	triggerYAML := "on:\n  workflow_dispatch:\n"
@@ -181,57 +325,17 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 		ianaZone = alias
 	}
 
-	// Build the timezone guard step (only for DST zones)
-	guardYAML := ""
-	guardCondition := ""
-	if isDST && len(crons) > 0 {
-		times := signTimes(schedule)
-		timesStr := strings.Join(times, " ")
-
-		guardYAML = fmt.Sprintf(`
-      - name: Timezone guard
-        id: tz
-        if: github.event_name == 'schedule'
-        run: |
-          CRON_MIN=$(echo "%s" | awk '{print $1}')
-          CRON_HOUR=$(echo "%s" | awk '{print $2}')
-          OFFSET=$(TZ=%s date +%%z | sed 's/00$//;s/^+0/+/;s/^+//')
-          LOCAL_HOUR=$(( CRON_HOUR + OFFSET ))
-          if [ "$LOCAL_HOUR" -lt 0 ]; then LOCAL_HOUR=$(( LOCAL_HOUR + 24 )); fi
-          if [ "$LOCAL_HOUR" -ge 24 ]; then LOCAL_HOUR=$(( LOCAL_HOUR - 24 )); fi
-          LOCAL_TIME=$(printf "%%02d:%%02d" "$LOCAL_HOUR" "$CRON_MIN")
-          SIGN_TIMES="%s"
-          MATCH=false
-          for t in $SIGN_TIMES; do
-            if [ "$LOCAL_TIME" = "$t" ]; then MATCH=true; break; fi
-          done
-          if [ "$MATCH" = "false" ]; then
-            echo "Skipping: cron $CRON_HOUR:$CRON_MIN + offset $OFFSET = local $LOCAL_TIME, not a configured sign time"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+	spec := catchUpSpec(schedule)
+	signBlock := `if [ "${{ github.event_name }}" = "schedule" ]; then
+            ./woffux sign --catch-up '%s' --catch-up-timezone '%s' --catch-up-window '2h'
           else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-`, "${{ github.event.schedule }}", "${{ github.event.schedule }}", ianaZone, timesStr)
-		guardCondition = "\n        if: steps.tz.outputs.skip != 'true'"
+            ./woffux sign
+          fi`
+	if spec == "" {
+		signBlock = `./woffux sign`
+	} else {
+		signBlock = fmt.Sprintf(signBlock, spec, ianaZone)
 	}
-
-	// Failure notification condition: always on failure, but skip if guard skipped
-	failureCondition := "\n        if: failure()"
-	if isDST {
-		failureCondition = "\n        if: failure() && steps.tz.outputs.skip != 'true'"
-	}
-
-	// Build cron→action case statement for --expected flag
-	var caseLines []string
-	for _, c := range crons {
-		caseLines = append(caseLines, fmt.Sprintf(`          "%s") EXPECTED="%s" ;;`, c.Cron, c.Action))
-	}
-	caseBlock := fmt.Sprintf(`CRON="${{ github.event.schedule }}"
-          EXPECTED=""
-          case "$CRON" in
-%s
-          esac
-          ./woffux sign ${EXPECTED:+--expected "$EXPECTED"}`, strings.Join(caseLines, "\n"))
 
 	return fmt.Sprintf(`name: Auto Sign
 
@@ -245,17 +349,18 @@ jobs:
   sign:
     name: Sign in Woffu
     runs-on: ubuntu-latest
-    steps:%s
+    steps:
 
-      - name: Download woffux%s
+      - name: Download woffux
         run: |
           curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
           chmod +x woffux
 
-      - name: Random delay%s
+      - name: Random delay
+        if: github.event_name == 'schedule'
         run: sleep $(( RANDOM %% %d + 1 ))
 
-      - name: Sign%s
+      - name: Sign
         run: |
           %s
         env:
@@ -270,7 +375,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      - name: Notify failure%s
+      - name: Notify failure
+        if: failure()
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             MSG="❌ woffux auto-sign failed at $(TZ=%s date '+%%H:%%M %%Z %%Y-%%m-%%d')"
@@ -280,7 +386,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-`, triggerYAML, guardYAML, guardCondition, guardCondition, randomDelay, guardCondition, caseBlock, failureCondition, ianaZone)
+`, triggerYAML, randomDelay, signBlock, ianaZone)
 }
 
 // GenerateManualWorkflowYAML generates the manual sign workflow.
@@ -438,6 +544,39 @@ func intSetJoin(ints map[int]bool, sep string) string {
 		parts = append(parts, strconv.Itoa(i))
 	}
 	return strings.Join(parts, sep)
+}
+
+func intSetRanges(ints map[int]bool) string {
+	values := make([]int, 0, len(ints))
+	for i := range ints {
+		values = append(values, i)
+	}
+	sort.Ints(values)
+	if len(values) == 0 {
+		return ""
+	}
+
+	var parts []string
+	start := values[0]
+	prev := values[0]
+	flush := func() {
+		if start == prev {
+			parts = append(parts, strconv.Itoa(start))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d-%d", start, prev))
+		}
+	}
+	for _, value := range values[1:] {
+		if value == prev+1 {
+			prev = value
+			continue
+		}
+		flush()
+		start = value
+		prev = value
+	}
+	flush()
+	return strings.Join(parts, ",")
 }
 
 func stringSetJoin(values map[string]bool, sep string) string {
