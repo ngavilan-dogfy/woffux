@@ -48,8 +48,8 @@ var autoOnCmd = &cobra.Command{
 
 		var enableErr error
 		spinner.New().
-			Title("Enabling auto-sign...").
-			Action(func() { enableErr = gh.EnableAutoSign(cfg.GithubFork) }).
+			Title("Syncing and enabling auto-sign...").
+			Action(func() { enableErr = gh.EnableAndRefreshAutoSign(cfg) }).
 			Run()
 
 		if enableErr != nil {

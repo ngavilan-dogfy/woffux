@@ -21,3 +21,27 @@ func TestIsAutoManagedWorkflow(t *testing.T) {
 		})
 	}
 }
+
+func TestAutoSignEnabledFromWorkflowsIgnoresAutoVersion(t *testing.T) {
+	enabled, found := autoSignEnabledFromWorkflows([]WorkflowStatus{
+		{Name: "Auto Version", State: "active"},
+		{Name: "Auto Sign", State: "disabled_manually"},
+	})
+
+	if !found {
+		t.Fatal("expected Auto Sign workflow to be found")
+	}
+	if enabled {
+		t.Fatal("Auto Version must not make Auto Sign look enabled")
+	}
+}
+
+func TestAutoSignEnabledFromWorkflowsRequiresExactWorkflow(t *testing.T) {
+	enabled, found := autoSignEnabledFromWorkflows([]WorkflowStatus{
+		{Name: "Auto Something Else", State: "active"},
+	})
+
+	if found || enabled {
+		t.Fatalf("unexpected Auto Sign match: enabled=%v found=%v", enabled, found)
+	}
+}

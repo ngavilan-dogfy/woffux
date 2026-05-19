@@ -202,6 +202,37 @@ func TestAutoStatusMsgIgnoresStaleRepo(t *testing.T) {
 	}
 }
 
+func TestAutoStatusMsgTracksOutOfSyncWorkflow(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{GithubFork: "current/woffux"}}
+
+	d.Update(autoStatusMsg{repo: "current/woffux", enabled: true, syncChecked: true, inSync: false})
+
+	if !d.needsAutoSync() {
+		t.Fatal("expected active out-of-sync workflow to need sync")
+	}
+
+	actions := d.getActions()
+	if len(actions) < 2 || actions[1].key != "sync" || actions[1].name != "Fix auto-sign sync" {
+		t.Fatalf("expected fix-sync action near top, got %#v", actions)
+	}
+}
+
+func TestRenderAutoSignShowsSyncNeeded(t *testing.T) {
+	active := true
+	inSync := false
+	d := &Dashboard{
+		cfg:        &config.Config{GithubFork: "owner/woffux", Schedule: config.DefaultSchedule()},
+		autoActive: &active,
+		autoInSync: &inSync,
+		width:      100,
+	}
+
+	rendered := d.renderAutoSign()
+	if !strings.Contains(rendered, "sync needed") {
+		t.Fatalf("rendered auto-sign status missing sync warning:\n%s", rendered)
+	}
+}
+
 func TestDataMsgStoresCompanyID(t *testing.T) {
 	d := &Dashboard{cfg: &config.Config{}}
 
@@ -237,6 +268,37 @@ func TestSignSlotSummary(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q: %s", want, got)
 		}
+	}
+}
+
+func TestNextScheduledSignShowsMissedFirstSign(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{Schedule: config.DefaultSchedule()}}
+	now := time.Date(2026, time.May, 19, 8, 58, 0, 0, time.Local)
+
+	next, ok := d.nextScheduledSignAt(now)
+	if !ok {
+		t.Fatal("expected next scheduled sign")
+	}
+	if next.Time != "08:30" || next.Action != "IN" || !next.Missed {
+		t.Fatalf("next = %#v, want missed 08:30 IN", next)
+	}
+}
+
+func TestNextScheduledSignFollowsCompletedSignEvents(t *testing.T) {
+	d := &Dashboard{
+		cfg: &config.Config{Schedule: config.DefaultSchedule()},
+		slots: []woffu.SignSlot{
+			{In: "2026-05-19T08:40:00.000"},
+		},
+	}
+	now := time.Date(2026, time.May, 19, 9, 0, 0, 0, time.Local)
+
+	next, ok := d.nextScheduledSignAt(now)
+	if !ok {
+		t.Fatal("expected next scheduled sign")
+	}
+	if next.Time != "13:30" || next.Action != "OUT" || next.Missed {
+		t.Fatalf("next = %#v, want upcoming 13:30 OUT", next)
 	}
 }
 

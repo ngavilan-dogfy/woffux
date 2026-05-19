@@ -20,6 +20,7 @@ What it does:
   1. Updates GitHub secrets (email, password, coordinates, telegram)
   2. Regenerates workflow files from your schedule
   3. Pushes updated workflows to your fork
+  4. Refreshes cron triggers if auto-signing is enabled
 
 When to use it:
   • After changing your password, coordinates, or schedule
@@ -88,16 +89,20 @@ This command makes GitHub match it.`,
 				lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(fmt.Sprintf("%d days, %d signs, tz=%s", days, signs, cfg.Timezone)))
 		}
 
-		// Step 3: Reload cron triggers (disable + re-enable workflow)
+		// Step 3: Refresh cron triggers without changing a disabled auto-sign state.
 		var reloadErr error
+		var reloaded bool
 		if workflowsErr == nil {
 			spinner.New().
-				Title("Reloading cron triggers...").
-				Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
+				Title("Checking cron triggers...").
+				Action(func() { reloaded, reloadErr = gh.ReloadAutoSignIfEnabled(cfg.GithubFork) }).
 				Run()
 
 			if reloadErr != nil {
 				fmt.Printf("  %s %s%s\n", sErrIcon.Render("✗"), sLabel.Render("Cron reload"), reloadErr)
+			} else if !reloaded {
+				fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Cron reload"),
+					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("auto-sign disabled, skipped"))
 			} else {
 				fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Cron reload"),
 					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("triggers refreshed"))
@@ -107,7 +112,11 @@ This command makes GitHub match it.`,
 		// Summary
 		fmt.Println()
 		if secretsErr == nil && workflowsErr == nil && reloadErr == nil {
-			fmt.Printf("  %s GitHub is up to date. Auto-signing will use these settings.\n\n", sOkIcon.Render("✓"))
+			if reloaded {
+				fmt.Printf("  %s GitHub is up to date. Auto-signing will use these settings.\n\n", sOkIcon.Render("✓"))
+			} else {
+				fmt.Printf("  %s GitHub is up to date. Auto-signing is disabled; settings are ready for the next enable.\n\n", sOkIcon.Render("✓"))
+			}
 		} else {
 			fmt.Printf("  %s Some items failed. Run %s to retry.\n\n",
 				sErrIcon.Render("!"),
@@ -127,6 +136,9 @@ func syncGitHubConfig(cfg *config.Config, password string) error {
 	}
 	if err := gh.SyncWorkflows(cfg); err != nil {
 		return fmt.Errorf("sync workflows: %w", err)
+	}
+	if _, err := gh.ReloadAutoSignIfEnabled(cfg.GithubFork); err != nil {
+		return fmt.Errorf("reload auto-sign: %w", err)
 	}
 	return nil
 }

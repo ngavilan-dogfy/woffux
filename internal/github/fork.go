@@ -154,6 +154,18 @@ func putFileViaAPI(repo, token, path, content string) error {
 	if err == nil {
 		sha = strings.TrimSpace(out)
 	}
+	if sha != "" {
+		out, err := ghOutputWithToken(token, "api",
+			fmt.Sprintf("repos/%s/contents/%s", repo, path),
+			"--jq", ".content")
+		if err == nil {
+			clean := strings.ReplaceAll(strings.TrimSpace(out), "\n", "")
+			current, decodeErr := base64.StdEncoding.DecodeString(clean)
+			if decodeErr == nil && strings.TrimSpace(string(current)) == strings.TrimSpace(content) {
+				return nil
+			}
+		}
+	}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte(content))
 

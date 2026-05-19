@@ -86,25 +86,20 @@ var scheduleEditCmd = &cobra.Command{
 			}
 
 			var pushErr error
+			var reloaded bool
 			spinner.New().
 				Title("Pushing workflows...").
-				Action(func() { pushErr = gh.SyncWorkflows(cfg) }).
+				Action(func() { reloaded, pushErr = gh.SyncWorkflowsAndRefresh(cfg) }).
 				Run()
 
 			if pushErr != nil {
 				fmt.Printf("  %s Push failed: %s\n", sWarn, pushErr)
 			} else {
 				fmt.Printf("  %s Workflows updated!\n", sOk)
-				// Reload cron triggers
-				var reloadErr error
-				spinner.New().
-					Title("Reloading cron triggers...").
-					Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
-					Run()
-				if reloadErr != nil {
-					fmt.Printf("  %s Cron reload failed: %s\n", sWarn, reloadErr)
-				} else {
+				if reloaded {
 					fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
+				} else {
+					fmt.Printf("  %s Auto-sign disabled, cron reload skipped.\n", sWarn)
 				}
 			}
 		}
@@ -126,15 +121,21 @@ var schedulePushCmd = &cobra.Command{
 		}
 
 		var pushErr error
+		var reloaded bool
 		spinner.New().
 			Title(fmt.Sprintf("Pushing to %s...", cfg.GithubFork)).
-			Action(func() { pushErr = gh.SyncWorkflows(cfg) }).
+			Action(func() { reloaded, pushErr = gh.SyncWorkflowsAndRefresh(cfg) }).
 			Run()
 
 		if pushErr != nil {
 			return pushErr
 		}
 		fmt.Printf("  %s Workflows updated!\n", sOk)
+		if reloaded {
+			fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
+		} else {
+			fmt.Printf("  %s Auto-sign disabled, cron reload skipped.\n", sWarn)
+		}
 		return nil
 	},
 }
@@ -225,25 +226,20 @@ var scheduleLoadCmd = &cobra.Command{
 		// Sync workflows if configured
 		if cfg.GithubFork != "" {
 			var pushErr error
+			var reloaded bool
 			spinner.New().
 				Title("Pushing workflows...").
-				Action(func() { pushErr = gh.SyncWorkflows(cfg) }).
+				Action(func() { reloaded, pushErr = gh.SyncWorkflowsAndRefresh(cfg) }).
 				Run()
 
 			if pushErr != nil {
 				fmt.Printf("  %s Push failed: %s\n", sWarn, pushErr)
 			} else {
 				fmt.Printf("  %s Workflows updated!\n", sOk)
-				// Reload cron triggers
-				var reloadErr error
-				spinner.New().
-					Title("Reloading cron triggers...").
-					Action(func() { reloadErr = gh.ReloadAutoSign(cfg.GithubFork) }).
-					Run()
-				if reloadErr != nil {
-					fmt.Printf("  %s Cron reload failed: %s\n", sWarn, reloadErr)
-				} else {
+				if reloaded {
 					fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
+				} else {
+					fmt.Printf("  %s Auto-sign disabled, cron reload skipped.\n", sWarn)
 				}
 			}
 		}

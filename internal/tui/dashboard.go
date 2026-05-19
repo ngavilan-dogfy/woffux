@@ -43,12 +43,18 @@ type dataMsg struct {
 }
 type errMsg struct{ err error }
 type signDoneMsg struct{}
-type autoToggleMsg struct{ enabled bool }
-type autoStatusMsg struct {
-	repo    string
+type autoToggleMsg struct {
 	enabled bool
+	inSync  bool
 }
-type syncDoneMsg struct{}
+type autoStatusMsg struct {
+	repo        string
+	enabled     bool
+	syncChecked bool
+	inSync      bool
+	syncErr     string
+}
+type syncDoneMsg struct{ reloaded bool }
 type presetAppliedMsg struct {
 	name    string
 	cfg     *config.Config
@@ -109,6 +115,8 @@ type Dashboard struct {
 	slots        []woffu.SignSlot
 	calendarDays []woffu.CalendarDay
 	autoActive   *bool // nil = unknown
+	autoInSync   *bool // nil = unknown or not applicable
+	autoSyncErr  string
 	err          error
 	companyId    int
 
@@ -147,6 +155,8 @@ func (d *Dashboard) applyConfig(cfg *config.Config) {
 	d.cfg = cfg
 	if newFork == "" || newFork != oldFork {
 		d.autoActive = nil
+		d.autoInSync = nil
+		d.autoSyncErr = ""
 	}
 }
 
@@ -212,6 +222,13 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case autoToggleMsg:
 		v := msg.enabled
 		d.autoActive = &v
+		d.autoSyncErr = ""
+		if msg.enabled {
+			inSync := msg.inSync
+			d.autoInSync = &inSync
+		} else {
+			d.autoInSync = nil
+		}
 		if v {
 			d.setFlash("Auto-signing enabled", false)
 		} else {
@@ -225,9 +242,20 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		v := msg.enabled
 		d.autoActive = &v
+		d.autoSyncErr = msg.syncErr
+		if msg.syncChecked {
+			inSync := msg.inSync
+			d.autoInSync = &inSync
+		} else {
+			d.autoInSync = nil
+		}
 
 	case syncDoneMsg:
-		d.setFlash("Synced to GitHub", false)
+		if msg.reloaded {
+			d.setFlash("Synced to GitHub; cron refreshed", false)
+		} else {
+			d.setFlash("Synced to GitHub; auto-sign disabled", false)
+		}
 		return d, tea.Batch(d.fetchAutoStatus(), d.clearFlashAfter(3*time.Second))
 
 	case presetAppliedMsg:
@@ -889,7 +917,13 @@ func (d *Dashboard) renderAutoSign() string {
 	status := sDimmed.Render("checking...")
 	if d.autoActive != nil {
 		if *d.autoActive {
-			status = sSuccess.Render("\u25CF active") // ●
+			if d.needsAutoSync() {
+				status = lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render("\u25CF active \u00B7 sync needed") // ● ·
+			} else if d.autoSyncErr != "" {
+				status = sSuccess.Render("\u25CF active") + sDimmed.Render(" \u00B7 sync unknown") // ● ·
+			} else {
+				status = sSuccess.Render("\u25CF active") // ●
+			}
 		} else {
 			status = sDanger.Render("\u25CB disabled") // ○
 		}
@@ -927,6 +961,10 @@ func (d *Dashboard) renderAutoSign() string {
 	}
 
 	return "\n" + header + "\n" + autoLine + todayLine
+}
+
+func (d *Dashboard) needsAutoSync() bool {
+	return d.autoActive != nil && *d.autoActive && d.autoInSync != nil && !*d.autoInSync
 }
 
 // ── Render: footer help ──
@@ -987,6 +1025,11 @@ func (d *Dashboard) getActions() []action {
 		actions = append(actions, action{
 			key: "auto-checking", name: "Checking auto-sign", desc: d.cfg.GithubFork, disabled: true,
 		})
+	case d.needsAutoSync():
+		actions = append(actions,
+			action{key: "sync", name: "Fix auto-sign sync", desc: "Push schedule and refresh cron"},
+			action{key: "auto-off", name: "Disable auto-sign", desc: "Pause scheduled signing"},
+		)
 	case *d.autoActive:
 		actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: "Pause scheduled signing"})
 	default:
@@ -1025,7 +1068,7 @@ func (d *Dashboard) getActions() []action {
 
 	if d.cfg.GithubFork == "" {
 		actions = append(actions, action{key: "sync-unavailable", name: "Sync to GitHub", desc: "run setup first", disabled: true})
-	} else {
+	} else if !d.needsAutoSync() {
 		actions = append(actions, action{key: "sync", name: "Sync to GitHub", desc: "Push secrets + workflows to fork"})
 	}
 
@@ -1365,12 +1408,21 @@ func (d *Dashboard) fetchAutoStatus() tea.Cmd {
 	if repo == "" {
 		return nil
 	}
+	cfgCopy := *d.cfg
 	return func() tea.Msg {
 		enabled, err := gh.IsAutoSignEnabled(repo)
 		if err != nil {
 			return nil // Silently fail - not critical
 		}
-		return autoStatusMsg{repo: repo, enabled: enabled}
+		msg := autoStatusMsg{repo: repo, enabled: enabled}
+		inSync, syncErr := gh.CheckWorkflowSync(repo, &cfgCopy)
+		if syncErr != nil {
+			msg.syncErr = syncErr.Error()
+		} else {
+			msg.syncChecked = true
+			msg.inSync = inSync
+		}
+		return msg
 	}
 }
 
@@ -1415,18 +1467,14 @@ func (d *Dashboard) toggleAuto(enable bool) tea.Cmd {
 	return func() tea.Msg {
 		var err error
 		if enable {
-			// Re-enabling: sync workflows + reload crons to ensure GitHub picks them up
-			if syncErr := gh.SyncWorkflows(cfg); syncErr != nil {
-				return errMsg{fmt.Errorf("sync workflows: %w", syncErr)}
-			}
-			err = gh.ReloadAutoSign(repo)
+			err = gh.EnableAndRefreshAutoSign(cfg)
 		} else {
 			err = gh.DisableAutoSign(repo)
 		}
 		if err != nil {
 			return errMsg{err}
 		}
-		return autoToggleMsg{enabled: enable}
+		return autoToggleMsg{enabled: enable, inSync: enable}
 	}
 }
 
@@ -1448,13 +1496,15 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 		if err := gh.SyncWorkflows(cfg); err != nil {
 			return errMsg{fmt.Errorf("sync workflows: %w", err)}
 		}
-		// Force GitHub to reload cron triggers
+		reloaded := false
 		if cfg.GithubFork != "" {
-			if err := gh.ReloadAutoSign(cfg.GithubFork); err != nil {
+			var err error
+			reloaded, err = gh.ReloadAutoSignIfEnabled(cfg.GithubFork)
+			if err != nil {
 				return errMsg{fmt.Errorf("reload auto-sign: %w", err)}
 			}
 		}
-		return syncDoneMsg{}
+		return syncDoneMsg{reloaded: reloaded}
 	}
 }
 
@@ -1898,10 +1948,8 @@ func (d *Dashboard) applyPreset(name string) tea.Cmd {
 		// Sync workflows and reload crons if GitHub is configured.
 		var syncErr error
 		if freshCfg.GithubFork != "" {
-			if err := gh.SyncWorkflows(freshCfg); err != nil {
+			if _, err := gh.SyncWorkflowsAndRefresh(freshCfg); err != nil {
 				syncErr = fmt.Errorf("sync workflows: %w", err)
-			} else if err := gh.ReloadAutoSign(freshCfg.GithubFork); err != nil {
-				syncErr = fmt.Errorf("reload auto-sign: %w", err)
 			}
 		}
 		return presetAppliedMsg{name: name, cfg: freshCfg, syncErr: syncErr}
@@ -2028,7 +2076,11 @@ func (d *Dashboard) hoursWorkedToday() (time.Duration, bool) {
 }
 
 func (d *Dashboard) todaySchedule() (config.DaySchedule, bool) {
-	switch time.Now().Weekday() {
+	return d.scheduleForWeekday(time.Now().Weekday())
+}
+
+func (d *Dashboard) scheduleForWeekday(day time.Weekday) (config.DaySchedule, bool) {
+	switch day {
 	case time.Monday:
 		return d.cfg.Schedule.Monday, d.cfg.Schedule.Monday.Enabled
 	case time.Tuesday:
@@ -2042,6 +2094,13 @@ func (d *Dashboard) todaySchedule() (config.DaySchedule, bool) {
 	default:
 		return config.DaySchedule{}, false
 	}
+}
+
+type scheduledSign struct {
+	Time      string
+	Action    string
+	Countdown string
+	Missed    bool
 }
 
 func (d *Dashboard) targetHoursToday() time.Duration {
@@ -2062,66 +2121,99 @@ func (d *Dashboard) targetHoursToday() time.Duration {
 }
 
 func (d *Dashboard) nextScheduledSign() string {
-	sched, enabled := d.todaySchedule()
-	if !enabled {
+	next, ok := d.nextScheduledSignAt(time.Now())
+	if !ok {
 		return ""
 	}
 
-	now := time.Now()
-	currentTime := now.Format("15:04")
+	signType := "IN "
+	marker := sSignIn.Render("\u25B6") // ▶
+	typeLabel := sSignIn.Render(signType)
+	if next.Action == "OUT" {
+		signType = "OUT"
+		marker = sSignOut.Render("\u25A0") // ■
+		typeLabel = sSignOut.Render(signType)
+	}
 
-	for i, t := range sched.Times {
-		if t.Time > currentTime {
-			// Determine sign type: even index = IN, odd index = OUT
-			signType := "IN "
-			marker := sSignIn.Render("\u25B6") // ▶
-			typeLabel := sSignIn.Render(signType)
-			if i%2 != 0 {
-				signType = "OUT"
-				marker = sSignOut.Render("\u25A0") // ■
-				typeLabel = sSignOut.Render(signType)
-			}
+	header := d.renderSectionLine("Next")
+	nextContent := fmt.Sprintf("%s %s  %s", marker, sValue.Render(next.Time), typeLabel)
+	if next.Missed {
+		nextContent += "    " + lipgloss.NewStyle().
+			Foreground(colorDanger).
+			Bold(true).
+			Render("missed")
+	} else if next.Countdown != "" {
+		nextContent += "    " + lipgloss.NewStyle().
+			Foreground(colorWarning).
+			Bold(true).
+			Render("\u23F1 "+next.Countdown) // ⏱
+	}
 
-			// Calculate countdown
-			nextTime, err := time.Parse("15:04", t.Time)
-			countdown := ""
-			if err == nil {
-				nextFull := time.Date(now.Year(), now.Month(), now.Day(),
-					nextTime.Hour(), nextTime.Minute(), 0, 0, now.Location())
-				diff := nextFull.Sub(now)
-				if diff > 0 {
-					h := int(diff.Hours())
-					m := int(diff.Minutes()) % 60
-					if h > 0 {
-						countdown = fmt.Sprintf("in %dh %dm", h, m)
-					} else {
-						countdown = fmt.Sprintf("in %dm", m)
-					}
-				}
-			}
+	borderColor := colorDim
+	if next.Missed {
+		borderColor = colorDanger
+	}
+	nextBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 2).
+		MarginLeft(2).
+		Render(nextContent)
 
-			header := d.renderSectionLine("Next")
+	return "\n" + header + "\n" + nextBox
+}
 
-			// Build a visually distinct next-sign indicator
-			nextContent := fmt.Sprintf("%s %s  %s", marker, sValue.Render(t.Time), typeLabel)
-			if countdown != "" {
-				nextContent += "    " + lipgloss.NewStyle().
-					Foreground(colorWarning).
-					Bold(true).
-					Render("\u23F1 "+countdown) // ⏱
-			}
+func (d *Dashboard) nextScheduledSignAt(now time.Time) (scheduledSign, bool) {
+	sched, enabled := d.scheduleForWeekday(now.Weekday())
+	if !enabled {
+		return scheduledSign{}, false
+	}
 
-			nextBox := lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(colorDim).
-				Padding(0, 2).
-				MarginLeft(2).
-				Render(nextContent)
+	nextIndex := d.completedSignEvents()
+	if nextIndex >= len(sched.Times) {
+		return scheduledSign{}, false
+	}
 
-			return "\n" + header + "\n" + nextBox
+	entry := sched.Times[nextIndex]
+	parsed, err := time.Parse("15:04", entry.Time)
+	if err != nil {
+		return scheduledSign{}, false
+	}
+
+	when := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, now.Location())
+	diff := when.Sub(now)
+	next := scheduledSign{
+		Time:   entry.Time,
+		Action: "IN",
+		Missed: diff < 0,
+	}
+	if nextIndex%2 != 0 {
+		next.Action = "OUT"
+	}
+	if diff > 0 {
+		h := int(diff.Hours())
+		m := int(diff.Minutes()) % 60
+		if h > 0 {
+			next.Countdown = fmt.Sprintf("in %dh %dm", h, m)
+		} else {
+			next.Countdown = fmt.Sprintf("in %dm", m)
 		}
 	}
-	return ""
+
+	return next, true
+}
+
+func (d *Dashboard) completedSignEvents() int {
+	events := 0
+	for _, s := range d.slots {
+		if s.In != "" {
+			events++
+		}
+		if s.Out != "" {
+			events++
+		}
+	}
+	return events
 }
 
 func renderProgressBar(current, target time.Duration, width int) string {
