@@ -14,6 +14,8 @@ on:
     - cron: '30 16 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+1)
     - cron: '30 6 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+2)
     - cron: '30 7 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+1)
+    - cron: '7,22,37,52 7-18 * * 1,2,3,4,5'  # catch-up every 15m (UTC+1)
+    - cron: '7,22,37,52 6-17 * * 1,2,3,4,5'  # catch-up every 15m (UTC+2)
   workflow_dispatch:
 
 
@@ -26,60 +28,23 @@ jobs:
     name: Sign in Woffu
     runs-on: ubuntu-latest
     steps:
-      - name: Timezone guard
-        id: tz
-        if: github.event_name == 'schedule'
-        run: |
-          CRON_MIN=$(echo "${{ github.event.schedule }}" | awk '{print $1}')
-          CRON_HOUR=$(echo "${{ github.event.schedule }}" | awk '{print $2}')
-          OFFSET=$(TZ=Europe/Madrid date +%z | sed 's/00$//;s/^+0/+/;s/^+//')
-          LOCAL_HOUR=$(( CRON_HOUR + OFFSET ))
-          if [ "$LOCAL_HOUR" -lt 0 ]; then LOCAL_HOUR=$(( LOCAL_HOUR + 24 )); fi
-          if [ "$LOCAL_HOUR" -ge 24 ]; then LOCAL_HOUR=$(( LOCAL_HOUR - 24 )); fi
-          LOCAL_TIME=$(printf "%02d:%02d" "$LOCAL_HOUR" "$CRON_MIN")
-          SIGN_TIMES="08:00 08:30 13:30 14:15 15:00 17:30"
-          MATCH=false
-          for t in $SIGN_TIMES; do
-            if [ "$LOCAL_TIME" = "$t" ]; then MATCH=true; break; fi
-          done
-          if [ "$MATCH" = "false" ]; then
-            echo "Skipping: cron $CRON_HOUR:$CRON_MIN + offset $OFFSET = local $LOCAL_TIME, not a configured sign time"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
 
       - name: Download woffux
-        if: steps.tz.outputs.skip != 'true'
         run: |
           curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
           chmod +x woffux
 
       - name: Random delay
-        if: steps.tz.outputs.skip != 'true'
+        if: github.event_name == 'schedule'
         run: sleep $(( RANDOM % 90 + 1 ))
 
       - name: Sign
-        if: steps.tz.outputs.skip != 'true'
         run: |
-          CRON="${{ github.event.schedule }}"
-          EXPECTED=""
-          case "$CRON" in
-          "0 13 * * 5") EXPECTED="out" ;;
-          "0 14 * * 5") EXPECTED="out" ;;
-          "0 6 * * 5") EXPECTED="in" ;;
-          "0 7 * * 5") EXPECTED="in" ;;
-          "15 12 * * 1,2,3,4") EXPECTED="in" ;;
-          "15 13 * * 1,2,3,4") EXPECTED="in" ;;
-          "30 11 * * 1,2,3,4") EXPECTED="out" ;;
-          "30 12 * * 1,2,3,4") EXPECTED="out" ;;
-          "30 15 * * 1,2,3,4") EXPECTED="out" ;;
-          "30 16 * * 1,2,3,4") EXPECTED="out" ;;
-          "30 6 * * 1,2,3,4") EXPECTED="in" ;;
-          "30 7 * * 1,2,3,4") EXPECTED="in" ;;
-          esac
-          ./woffux sign ${EXPECTED:+--expected "$EXPECTED"}
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            ./woffux sign --catch-up '1:08:30:in;1:13:30:out;1:14:15:in;1:17:30:out;2:08:30:in;2:13:30:out;2:14:15:in;2:17:30:out;3:08:30:in;3:13:30:out;3:14:15:in;3:17:30:out;4:08:30:in;4:13:30:out;4:14:15:in;4:17:30:out;5:08:00:in;5:15:00:out' --catch-up-timezone 'Europe/Madrid' --catch-up-window '2h'
+          else
+            ./woffux sign
+          fi
         env:
           WOFFU_URL: ${{ secrets.WOFFU_URL }}
           WOFFU_COMPANY_URL: ${{ secrets.WOFFU_COMPANY_URL }}
@@ -93,7 +58,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Notify failure
-        if: failure() && steps.tz.outputs.skip != 'true'
+        if: failure()
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             MSG="❌ woffux auto-sign failed at $(TZ=Europe/Madrid date '+%H:%M %Z %Y-%m-%d')"
