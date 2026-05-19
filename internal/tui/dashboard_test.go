@@ -3,8 +3,10 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
 func TestGetActionsSortsPresetNames(t *testing.T) {
@@ -163,5 +165,114 @@ func TestRenderOverlayMenuShowsClearPresetState(t *testing.T) {
 	}
 	if strings.Contains(rendered, "preset-active") {
 		t.Fatalf("rendered stale preset-active marker:\n%s", rendered)
+	}
+}
+
+func TestApplyConfigClearsStaleAutoStatus(t *testing.T) {
+	active := true
+	d := &Dashboard{
+		cfg:        &config.Config{GithubFork: "old/woffux"},
+		autoActive: &active,
+	}
+
+	d.applyConfig(&config.Config{GithubFork: "new/woffux"})
+	if d.autoActive != nil {
+		t.Fatal("expected auto status to reset when fork changes")
+	}
+
+	active = true
+	d.autoActive = &active
+	d.applyConfig(&config.Config{})
+	if d.autoActive != nil {
+		t.Fatal("expected auto status to reset when fork is removed")
+	}
+}
+
+func TestAutoStatusMsgIgnoresStaleRepo(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{GithubFork: "current/woffux"}}
+
+	d.Update(autoStatusMsg{repo: "old/woffux", enabled: true})
+	if d.autoActive != nil {
+		t.Fatal("stale auto status should be ignored")
+	}
+
+	d.Update(autoStatusMsg{repo: "current/woffux", enabled: true})
+	if d.autoActive == nil || !*d.autoActive {
+		t.Fatalf("current auto status was not applied: %#v", d.autoActive)
+	}
+}
+
+func TestDataMsgStoresCompanyID(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{}}
+
+	d.Update(dataMsg{userId: 12, companyId: 34})
+
+	if d.userId != 12 || d.companyId != 34 {
+		t.Fatalf("cached ids = (%d, %d), want (12, 34)", d.userId, d.companyId)
+	}
+}
+
+func TestRequestDoneClearsCalendarSelection(t *testing.T) {
+	d := &Dashboard{
+		cfg: &config.Config{},
+		cal: &calendarGrid{
+			selected: map[string]bool{"2026-05-19": true},
+		},
+	}
+
+	d.Update(requestDoneMsg{count: 1, action: "submitted"})
+
+	if len(d.cal.selected) != 0 {
+		t.Fatalf("selection was not cleared: %#v", d.cal.selected)
+	}
+}
+
+func TestSignSlotSummary(t *testing.T) {
+	got := signSlotSummary([]woffu.SignSlot{
+		{In: "2026-05-19T08:30:00.000", Out: "2026-05-19T13:30:00.000"},
+		{In: "2026-05-19T14:15:00.000"},
+	})
+
+	for _, want := range []string{"Sign history:", "IN 08:30", "OUT 13:30", "IN 14:15"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestExecuteViewSignsShowsFlash(t *testing.T) {
+	d := &Dashboard{
+		cfg: &config.Config{},
+		cal: newCalendarGrid(2026, time.May, []woffu.CalendarDay{
+			{
+				Date: "2026-05-19",
+				Signs: []woffu.SignSlot{
+					{In: "2026-05-19T08:30:00.000", Out: "2026-05-19T13:30:00.000"},
+				},
+			},
+		}),
+	}
+	d.cal.cursor = 19
+
+	if cmd := d.executeDayAction(action{key: "view-signs", name: "View sign history"}); cmd == nil {
+		t.Fatal("expected clear-flash command")
+	}
+	if !strings.Contains(d.flash, "IN 08:30") || !strings.Contains(d.flash, "OUT 13:30") {
+		t.Fatalf("unexpected flash: %q", d.flash)
+	}
+}
+
+func TestNoopDayActionIsDisabled(t *testing.T) {
+	d := &Dashboard{
+		cfg: &config.Config{},
+		cal: newCalendarGrid(2026, time.May, []woffu.CalendarDay{
+			{Date: "2026-05-19", Status: "holiday", EventNames: []string{"Local holiday"}},
+		}),
+	}
+	d.cal.cursor = 19
+
+	actions := d.getDayActions()
+	if len(actions) != 1 || actions[0].key != "noop" || !actions[0].disabled {
+		t.Fatalf("unexpected day actions: %#v", actions)
 	}
 }

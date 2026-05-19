@@ -39,11 +39,15 @@ type dataMsg struct {
 	slots        []woffu.SignSlot
 	calendarDays []woffu.CalendarDay
 	userId       int
+	companyId    int
 }
 type errMsg struct{ err error }
 type signDoneMsg struct{}
 type autoToggleMsg struct{ enabled bool }
-type autoStatusMsg struct{ enabled bool }
+type autoStatusMsg struct {
+	repo    string
+	enabled bool
+}
 type syncDoneMsg struct{}
 type presetAppliedMsg struct {
 	name    string
@@ -106,6 +110,7 @@ type Dashboard struct {
 	calendarDays []woffu.CalendarDay
 	autoActive   *bool // nil = unknown
 	err          error
+	companyId    int
 
 	// UI state
 	activeTab   int
@@ -133,6 +138,18 @@ func NewDashboard(client, companyClient *woffu.Client, cfg *config.Config, passw
 	}
 }
 
+func (d *Dashboard) applyConfig(cfg *config.Config) {
+	oldFork := ""
+	if d.cfg != nil {
+		oldFork = strings.TrimSpace(d.cfg.GithubFork)
+	}
+	newFork := strings.TrimSpace(cfg.GithubFork)
+	d.cfg = cfg
+	if newFork == "" || newFork != oldFork {
+		d.autoActive = nil
+	}
+}
+
 func (d *Dashboard) Init() tea.Cmd {
 	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.tick())
 }
@@ -157,6 +174,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.slots = msg.slots
 		d.calendarDays = msg.calendarDays
 		d.userId = msg.userId
+		d.companyId = msg.companyId
 		if d.cal == nil && len(msg.calendarDays) > 0 {
 			now := time.Now()
 			d.cal = newCalendarGrid(now.Year(), now.Month(), msg.calendarDays)
@@ -172,6 +190,9 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case requestDoneMsg:
+		if d.cal != nil {
+			d.cal.clearSelection()
+		}
 		action := msg.action
 		if action == "" {
 			action = "submitted"
@@ -181,7 +202,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			noun = "request"
 		}
 		d.setFlash(fmt.Sprintf("%d %s %s!", msg.count, noun, action), false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+		return d, tea.Batch(d.refreshData(), d.clearFlashAfter(3*time.Second))
 
 	case signDoneMsg:
 		d.signing = false
@@ -199,27 +220,30 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return d, d.clearFlashAfter(3 * time.Second)
 
 	case autoStatusMsg:
+		if strings.TrimSpace(msg.repo) != strings.TrimSpace(d.cfg.GithubFork) {
+			return d, nil
+		}
 		v := msg.enabled
 		d.autoActive = &v
 
 	case syncDoneMsg:
 		d.setFlash("Synced to GitHub", false)
-		return d, d.clearFlashAfter(3 * time.Second)
+		return d, tea.Batch(d.fetchAutoStatus(), d.clearFlashAfter(3*time.Second))
 
 	case presetAppliedMsg:
-		d.cfg = msg.cfg
+		d.applyConfig(msg.cfg)
 		if msg.syncErr != nil {
 			d.setFlash(fmt.Sprintf("Switched to \"%s\"; GitHub sync failed: %s", msg.name, msg.syncErr), true)
-			return d, tea.Batch(d.fetchData(), d.clearFlashAfter(5*time.Second))
+			return d, tea.Batch(d.refreshData(), d.clearFlashAfter(5*time.Second))
 		}
 		d.setFlash(fmt.Sprintf("Switched to \"%s\" schedule", msg.name), false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+		return d, tea.Batch(d.refreshData(), d.clearFlashAfter(3*time.Second))
 
 	case presetSavedMsg:
 		// Reload config to pick up the new preset in saved_schedules
 		newCfg, err := config.Load()
 		if err == nil {
-			d.cfg = newCfg
+			d.applyConfig(newCfg)
 			if pw, pwErr := config.GetPassword(newCfg.WoffuEmail); pwErr == nil {
 				d.password = pw
 			}
@@ -235,13 +259,13 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Reload config after external editor exits.
 		newCfg, err := config.Load()
 		if err == nil {
-			d.cfg = newCfg
+			d.applyConfig(newCfg)
 			if pw, pwErr := config.GetPassword(newCfg.WoffuEmail); pwErr == nil {
 				d.password = pw
 			}
 		}
 		d.setFlash(fmt.Sprintf("%s updated!", msg.label), false)
-		return d, tea.Batch(d.fetchData(), d.clearFlashAfter(3*time.Second))
+		return d, tea.Batch(d.refreshData(), d.clearFlashAfter(3*time.Second))
 
 	case errMsg:
 		d.loading = false
@@ -267,20 +291,19 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ── Overlay: calendar action (multi-select) ──
 	if d.overlay == overlayCalAction {
 		calActions := d.getCalActions()
+		d.menuCursor = clampActionCursor(calActions, d.menuCursor)
 		switch key {
 		case "esc", "q":
 			d.overlay = overlayNone
 		case "up", "k":
-			if d.menuCursor > 0 {
-				d.menuCursor--
-			}
+			d.menuCursor = moveActionCursor(calActions, d.menuCursor, -1)
 		case "down", "j":
-			if d.menuCursor < len(calActions)-1 {
-				d.menuCursor++
-			}
+			d.menuCursor = moveActionCursor(calActions, d.menuCursor, 1)
 		case "enter":
-			d.overlay = overlayNone
-			return d, d.executeCalAction(calActions[d.menuCursor])
+			if isSelectableAction(calActions[d.menuCursor]) {
+				d.overlay = overlayNone
+				return d, d.executeCalAction(calActions[d.menuCursor])
+			}
 		}
 		return d, nil
 	}
@@ -288,20 +311,19 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// ── Overlay: single day action ──
 	if d.overlay == overlayDayAction {
 		dayActions := d.getDayActions()
+		d.menuCursor = clampActionCursor(dayActions, d.menuCursor)
 		switch key {
 		case "esc", "q":
 			d.overlay = overlayNone
 		case "up", "k":
-			if d.menuCursor > 0 {
-				d.menuCursor--
-			}
+			d.menuCursor = moveActionCursor(dayActions, d.menuCursor, -1)
 		case "down", "j":
-			if d.menuCursor < len(dayActions)-1 {
-				d.menuCursor++
-			}
+			d.menuCursor = moveActionCursor(dayActions, d.menuCursor, 1)
 		case "enter":
-			d.overlay = overlayNone
-			return d, d.executeDayAction(dayActions[d.menuCursor])
+			if isSelectableAction(dayActions[d.menuCursor]) {
+				d.overlay = overlayNone
+				return d, d.executeDayAction(dayActions[d.menuCursor])
+			}
 		}
 		return d, nil
 	}
@@ -451,17 +473,24 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		return d, d.trySign()
 	case "a":
-		if d.autoActive != nil {
-			return d, d.toggleAuto(!*d.autoActive)
-		} else if d.cfg.GithubFork == "" {
+		if d.cfg.GithubFork == "" {
 			d.setFlash("Auto-sign not set up. Run woffux setup.", true)
 			return d, d.clearFlashAfter(3 * time.Second)
 		}
+		if d.autoActive == nil {
+			d.setFlash("Auto-sign status is still loading", true)
+			return d, d.clearFlashAfter(3 * time.Second)
+		}
+		return d, d.toggleAuto(!*d.autoActive)
 	case "r":
 		d.loading = true
 		d.flash = ""
-		return d, d.fetchData()
+		return d, d.refreshData()
 	case "o":
+		if strings.TrimSpace(d.cfg.WoffuCompanyURL) == "" {
+			d.setFlash("Woffu URL not configured", true)
+			return d, d.clearFlashAfter(3 * time.Second)
+		}
 		openBrowserCmd(d.cfg.WoffuCompanyURL + "/v2")
 		d.setFlash("Opened Woffu in browser", false)
 		return d, d.clearFlashAfter(2 * time.Second)
@@ -762,6 +791,22 @@ func extractTime(datetime string) string {
 		}
 	}
 	return datetime
+}
+
+func signSlotSummary(slots []woffu.SignSlot) string {
+	var parts []string
+	for _, slot := range slots {
+		if slot.In != "" {
+			parts = append(parts, "IN "+extractTime(slot.In))
+		}
+		if slot.Out != "" {
+			parts = append(parts, "OUT "+extractTime(slot.Out))
+		}
+	}
+	if len(parts) == 0 {
+		return "No sign history for this day"
+	}
+	return "Sign history: " + strings.Join(parts, "  \u00B7  ") // ·
 }
 
 // ── Render: Events tab ──
@@ -1188,6 +1233,10 @@ func truncatePlainToWidth(value string, width int) string {
 
 // ── Commands ──
 
+func (d *Dashboard) refreshData() tea.Cmd {
+	return tea.Batch(d.fetchData(), d.fetchAutoStatus())
+}
+
 func (d *Dashboard) fetchData() tea.Cmd {
 	client := d.client
 	companyClient := d.companyClient
@@ -1213,6 +1262,7 @@ func (d *Dashboard) fetchData() tea.Cmd {
 			slots     []woffu.SignSlot
 			calDays   []woffu.CalendarDay
 			userId    int
+			companyId int
 			reqs      []woffu.UserRequest
 			signs     []woffu.SignRecord
 			infoErr   error
@@ -1232,7 +1282,7 @@ func (d *Dashboard) fetchData() tea.Cmd {
 		go func() {
 			defer wg.Done()
 			calDays, _ = woffu.GetCalendarMonthYM(companyClient, token, calYear, calMonth)
-			userId, _, _ = woffu.GetUserIds(companyClient, token)
+			userId, companyId, _ = woffu.GetUserIds(companyClient, token)
 			if userId > 0 {
 				var wg2 sync.WaitGroup
 				wg2.Add(2)
@@ -1254,7 +1304,7 @@ func (d *Dashboard) fetchData() tea.Cmd {
 			return errMsg{eventsErr}
 		}
 
-		return dataMsg{token: token, signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, userId: userId}
+		return dataMsg{token: token, signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, userId: userId, companyId: companyId}
 	}
 }
 
@@ -1265,7 +1315,7 @@ func (d *Dashboard) fetchCalendarData() tea.Cmd {
 		return nil
 	}
 	if d.token == "" {
-		return d.fetchData()
+		return d.refreshData()
 	}
 	companyClient := d.companyClient
 	token := d.token
@@ -1311,7 +1361,7 @@ func (d *Dashboard) fetchCalendarData() tea.Cmd {
 }
 
 func (d *Dashboard) fetchAutoStatus() tea.Cmd {
-	repo := d.cfg.GithubFork
+	repo := strings.TrimSpace(d.cfg.GithubFork)
 	if repo == "" {
 		return nil
 	}
@@ -1320,7 +1370,7 @@ func (d *Dashboard) fetchAutoStatus() tea.Cmd {
 		if err != nil {
 			return nil // Silently fail - not critical
 		}
-		return autoStatusMsg{enabled: enabled}
+		return autoStatusMsg{repo: repo, enabled: enabled}
 	}
 }
 
@@ -1408,6 +1458,10 @@ func (d *Dashboard) syncGitHub() tea.Cmd {
 	}
 }
 
+func (d *Dashboard) cachedUserCompanyIDs() (userId, companyId int) {
+	return d.userId, d.companyId
+}
+
 // editSchedule suspends the TUI and runs `woffux schedule edit` interactively.
 func (d *Dashboard) editSchedule() tea.Cmd {
 	return d.execWoffux("Schedule", "schedule", "edit")
@@ -1485,7 +1539,7 @@ func (d *Dashboard) getCalActions() []action {
 	// Fallback if nothing matched (e.g. all holidays/weekends)
 	if len(actions) == 0 {
 		actions = append(actions, action{
-			key: "noop", name: "No actions available", desc: "Selected days are holidays/weekends",
+			key: "noop", name: "No actions available", desc: "Selected days are holidays/weekends", disabled: true,
 		})
 	}
 
@@ -1493,7 +1547,7 @@ func (d *Dashboard) getCalActions() []action {
 }
 
 func (d *Dashboard) executeCalAction(a action) tea.Cmd {
-	if a.key == "noop" {
+	if !isSelectableAction(a) {
 		return nil
 	}
 
@@ -1530,6 +1584,7 @@ func (d *Dashboard) executeCalAction(a action) tea.Cmd {
 	d.setFlash(fmt.Sprintf("Submitting %d requests...", len(eligibleDates)), false)
 	companyClient := d.companyClient
 	token := d.token
+	cachedUserID, cachedCompanyID := d.cachedUserCompanyIDs()
 
 	return func() tea.Msg {
 		types, err := woffu.GetRequestTypes(companyClient, token)
@@ -1548,9 +1603,13 @@ func (d *Dashboard) executeCalAction(a action) tea.Cmd {
 			return errMsg{fmt.Errorf("request type \"%s\" not found", search)}
 		}
 
-		userId, companyId, err := woffu.GetUserIds(companyClient, token)
-		if err != nil {
-			return errMsg{err}
+		userId, companyId := cachedUserID, cachedCompanyID
+		if userId == 0 || companyId == 0 {
+			var err error
+			userId, companyId, err = woffu.GetUserIds(companyClient, token)
+			if err != nil {
+				return errMsg{err}
+			}
 		}
 
 		count := 0
@@ -1609,23 +1668,22 @@ func (d *Dashboard) cancelSelectedRequests(targetStatus string) tea.Cmd {
 
 func (d *Dashboard) renderCalActionOverlay() string {
 	actions := d.getCalActions()
+	d.menuCursor = clampActionCursor(actions, d.menuCursor)
 
 	infos := d.cal.selectedDayInfos()
 	titleText := fmt.Sprintf("\u25C6 Action for %d days", len(infos)) // ◆
-	titleBar := sOverlayTitle.Width(40).Render(titleText)
+	innerWidth := overlayMenuInnerWidth(d.width)
+	titleBar := sOverlayTitle.Width(innerWidth).Render(titleText)
 
 	var rows []string
 	for i, a := range actions {
-		if i == d.menuCursor {
-			rows = append(rows, sMenuItemActive.Render("\u25B8 "+a.name)) // ▸
-		} else {
-			rows = append(rows, sMenuItem.Render("  "+a.name))
-		}
+		rows = append(rows, renderMenuActionRow(a, i == d.menuCursor && isSelectableAction(a), innerWidth))
 	}
 
 	helpLine := "\n" + lipgloss.NewStyle().
 		Foreground(colorDim).
 		Padding(0, 2).
+		Width(innerWidth).
 		Render("\u2191\u2193 navigate  \u23CE submit  esc cancel")
 
 	menuContent := titleBar + "\n\n" + strings.Join(rows, "\n") + helpLine
@@ -1641,30 +1699,25 @@ func (d *Dashboard) renderCalActionOverlay() string {
 
 func (d *Dashboard) renderDayActionOverlay() string {
 	actions := d.getDayActions()
+	d.menuCursor = clampActionCursor(actions, d.menuCursor)
 
 	info := d.cal.dayInfo(d.cal.cursor)
 	dateLabel := info.Date
 	if t, err := time.Parse("2006-01-02", info.Date); err == nil {
 		dateLabel = t.Format("Mon 2 Jan 2006")
 	}
-	titleBar := sOverlayTitle.Width(40).Render("\u25C6 " + dateLabel) // ◆
+	innerWidth := overlayMenuInnerWidth(d.width)
+	titleBar := sOverlayTitle.Width(innerWidth).Render("\u25C6 " + dateLabel) // ◆
 
 	var rows []string
 	for i, a := range actions {
-		desc := ""
-		if a.desc != "" {
-			desc = "  " + sDimmed.Render(a.desc)
-		}
-		if i == d.menuCursor {
-			rows = append(rows, sMenuItemActive.Render("\u25B8 "+a.name)+desc) // ▸
-		} else {
-			rows = append(rows, sMenuItem.Render("  "+a.name)+desc)
-		}
+		rows = append(rows, renderMenuActionRow(a, i == d.menuCursor && isSelectableAction(a), innerWidth))
 	}
 
 	helpLine := "\n" + lipgloss.NewStyle().
 		Foreground(colorDim).
 		Padding(0, 2).
+		Width(innerWidth).
 		Render("\u2191\u2193 navigate  \u23CE select  esc close")
 
 	menuContent := titleBar + "\n\n" + strings.Join(rows, "\n") + helpLine
@@ -1686,7 +1739,7 @@ func (d *Dashboard) getDayActions() []action {
 	}
 	info := d.cal.dayInfo(d.cal.cursor)
 	if info == nil {
-		return []action{{key: "noop", name: "No data for this day", desc: ""}}
+		return []action{{key: "noop", name: "No data for this day", desc: "", disabled: true}}
 	}
 
 	var actions []action
@@ -1729,11 +1782,11 @@ func (d *Dashboard) getDayActions() []action {
 	if len(actions) == 0 {
 		switch info.Status {
 		case "holiday":
-			actions = append(actions, action{key: "noop", name: "Holiday — no actions", desc: strings.Join(info.EventNames, ", ")})
+			actions = append(actions, action{key: "noop", name: "Holiday - no actions", desc: strings.Join(info.EventNames, ", "), disabled: true})
 		case "weekend":
-			actions = append(actions, action{key: "noop", name: "Weekend — no actions", desc: ""})
+			actions = append(actions, action{key: "noop", name: "Weekend - no actions", desc: "", disabled: true})
 		default:
-			actions = append(actions, action{key: "noop", name: "No actions available", desc: ""})
+			actions = append(actions, action{key: "noop", name: "No actions available", desc: "", disabled: true})
 		}
 	}
 
@@ -1741,8 +1794,17 @@ func (d *Dashboard) getDayActions() []action {
 }
 
 func (d *Dashboard) executeDayAction(a action) tea.Cmd {
-	if a.key == "noop" || a.key == "view-signs" {
+	if !isSelectableAction(a) {
 		return nil
+	}
+	if a.key == "view-signs" {
+		info := d.cal.dayInfo(d.cal.cursor)
+		if info == nil || len(info.Signs) == 0 {
+			d.setFlash("No sign history for this day", true)
+		} else {
+			d.setFlash(signSlotSummary(info.Signs), false)
+		}
+		return d.clearFlashAfter(5 * time.Second)
 	}
 
 	// Handle cancel
@@ -1785,6 +1847,7 @@ func (d *Dashboard) executeDayAction(a action) tea.Cmd {
 	d.setFlash("Submitting request...", false)
 	companyClient := d.companyClient
 	token := d.token
+	cachedUserID, cachedCompanyID := d.cachedUserCompanyIDs()
 	return func() tea.Msg {
 		types, err := woffu.GetRequestTypes(companyClient, token)
 		if err != nil {
@@ -1802,9 +1865,13 @@ func (d *Dashboard) executeDayAction(a action) tea.Cmd {
 			return errMsg{fmt.Errorf("request type \"%s\" not found", search)}
 		}
 
-		userId, companyId, err := woffu.GetUserIds(companyClient, token)
-		if err != nil {
-			return errMsg{err}
+		userId, companyId := cachedUserID, cachedCompanyID
+		if userId == 0 || companyId == 0 {
+			var err error
+			userId, companyId, err = woffu.GetUserIds(companyClient, token)
+			if err != nil {
+				return errMsg{err}
+			}
 		}
 
 		if err := woffu.CreateRequest(companyClient, token, userId, companyId, matchedType.ID, date, date, matchedType.IsVacation); err != nil {
