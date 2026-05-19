@@ -97,6 +97,16 @@ woffux update
 woffux upgrade
 ```
 
+Releases are versioned automatically from pushes to `main` using Conventional Commits:
+
+| Commit type | Version bump |
+|---|---|
+| `fix:` / `perf:` | Patch (`v1.2.3` → `v1.2.4`) |
+| `feat:` | Minor (`v1.2.3` → `v1.3.0`) |
+| `type!:` or `BREAKING CHANGE:` | Major (`v1.2.3` → `v2.0.0`) |
+
+Other types such as `docs:`, `ci:`, and `chore:` do not create a release. Add `[skip release]` to a commit message to exclude it from version calculation.
+
 ## Setup
 
 ```bash

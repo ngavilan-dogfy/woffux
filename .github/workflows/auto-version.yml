@@ -1,0 +1,81 @@
+name: Auto Version
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '.github/workflows/sign.yml'
+      - '.github/workflows/sign-manual.yml'
+      - '.github/workflows/keepalive.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-version-main
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    name: Version and release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate version
+        id: version
+        run: scripts/next-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: No release needed
+        if: steps.version.outputs.should_release != 'true'
+        run: |
+          echo "No version bump needed. Conventional release types are: breaking, feat, fix, perf."
+
+      - name: Setup Go
+        if: steps.version.outputs.should_release == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Test
+        if: steps.version.outputs.should_release == 'true'
+        run: go test ./...
+
+      - name: Build binaries
+        if: steps.version.outputs.should_release == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.tag }}"
+          LDFLAGS="-s -w -X github.com/ngavilan-dogfy/woffux/cmd.Version=${VERSION}"
+          mkdir -p dist
+          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffux-darwin-arm64 ./cmd/woffux
+          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffux-darwin-amd64 ./cmd/woffux
+          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffux-linux-amd64 ./cmd/woffux
+          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffux-linux-arm64 ./cmd/woffux
+
+      - name: Publish release
+        if: steps.version.outputs.should_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::warning::Release $tag already exists; skipping publish."
+            exit 0
+          fi
+
+          gh release create "$tag" \
+            dist/woffux-darwin-arm64 \
+            dist/woffux-darwin-amd64 \
+            dist/woffux-linux-amd64 \
+            dist/woffux-linux-arm64 \
+            --target "$GITHUB_SHA" \
+            --title "$tag" \
+            --generate-notes
