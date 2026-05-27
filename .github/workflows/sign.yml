@@ -2,20 +2,20 @@ name: Auto Sign
 
 on:
   schedule:
-    - cron: '0 15 * * 5'
-      timezone: 'Europe/Madrid'   # Viernes 15:00
-    - cron: '0 8 * * 5'
-      timezone: 'Europe/Madrid'   # Viernes 08:00
-    - cron: '15 14 * * 1-4'
-      timezone: 'Europe/Madrid'   # L-J 14:15
-    - cron: '30 13 * * 1-4'
-      timezone: 'Europe/Madrid'   # L-J 13:30
-    - cron: '30 17 * * 1-4'
-      timezone: 'Europe/Madrid'   # L-J 17:30
-    - cron: '30 8 * * 1-4'
-      timezone: 'Europe/Madrid'   # L-J 08:30
-    - cron: '7,22,37,52 7-18 * * 1-5'
-      timezone: 'Europe/Madrid'   # Catch-up cada 15 min, L-V
+    - cron: '0 13 * * 5'  # Fri 15:00 (UTC+2)
+    - cron: '0 14 * * 5'  # Fri 15:00 (UTC+1)
+    - cron: '0 6 * * 5'  # Fri 08:00 (UTC+2)
+    - cron: '0 7 * * 5'  # Fri 08:00 (UTC+1)
+    - cron: '15 12 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 14:15 (UTC+2)
+    - cron: '15 13 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 14:15 (UTC+1)
+    - cron: '30 11 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 13:30 (UTC+2)
+    - cron: '30 12 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 13:30 (UTC+1)
+    - cron: '30 15 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+2)
+    - cron: '30 16 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+1)
+    - cron: '30 6 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+2)
+    - cron: '30 7 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+1)
+    - cron: '7,22,37,52 7-18 * * 1,2,3,4,5'  # catch-up every 15m (UTC+1)
+    - cron: '7,22,37,52 6-17 * * 1,2,3,4,5'  # catch-up every 15m (UTC+2)    
   workflow_dispatch:
 
 concurrency:
