@@ -16,7 +16,7 @@
 
 <br>
 
-## What it does
+## What it does.
 
 - Clocks in/out on Woffu **automatically** via GitHub Actions
 - Detects holidays, absences, and telework (approved **or pending**)
