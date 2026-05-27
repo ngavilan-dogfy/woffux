@@ -2,22 +2,21 @@ name: Auto Sign
 
 on:
   schedule:
-    - cron: '0 13 * * 5'  # Fri 15:00 (UTC+2)
-    - cron: '0 14 * * 5'  # Fri 15:00 (UTC+1)
-    - cron: '0 6 * * 5'  # Fri 08:00 (UTC+2)
-    - cron: '0 7 * * 5'  # Fri 08:00 (UTC+1)
-    - cron: '15 12 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 14:15 (UTC+2)
-    - cron: '15 13 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 14:15 (UTC+1)
-    - cron: '30 11 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 13:30 (UTC+2)
-    - cron: '30 12 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 13:30 (UTC+1)
-    - cron: '30 15 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+2)
-    - cron: '30 16 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 17:30 (UTC+1)
-    - cron: '30 6 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+2)
-    - cron: '30 7 * * 1,2,3,4'  # Mon-Tue-Wed-Thu 08:30 (UTC+1)
-    - cron: '7,22,37,52 7-18 * * 1,2,3,4,5'  # catch-up every 15m (UTC+1)
-    - cron: '7,22,37,52 6-17 * * 1,2,3,4,5'  # catch-up every 15m (UTC+2)
+    - cron: '0 15 * * 5'
+      timezone: 'Europe/Madrid'   # Viernes 15:00
+    - cron: '0 8 * * 5'
+      timezone: 'Europe/Madrid'   # Viernes 08:00
+    - cron: '15 14 * * 1-4'
+      timezone: 'Europe/Madrid'   # L-J 14:15
+    - cron: '30 13 * * 1-4'
+      timezone: 'Europe/Madrid'   # L-J 13:30
+    - cron: '30 17 * * 1-4'
+      timezone: 'Europe/Madrid'   # L-J 17:30
+    - cron: '30 8 * * 1-4'
+      timezone: 'Europe/Madrid'   # L-J 08:30
+    - cron: '7,22,37,52 7-18 * * 1-5'
+      timezone: 'Europe/Madrid'   # Catch-up cada 15 min, L-V
   workflow_dispatch:
-
 
 concurrency:
   group: sign
@@ -27,12 +26,21 @@ jobs:
   sign:
     name: Sign in Woffu
     runs-on: ubuntu-latest
-    steps:
 
+    steps:
       - name: Download woffux
         run: |
           curl -fsSL "https://github.com/ngavilan-dogfy/woffux/releases/latest/download/woffux-linux-amd64" -o woffux
           chmod +x woffux
+
+      - name: Show trigger info
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "repository=${{ github.repository }}"
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          echo "now_utc=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "now_madrid=$(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - name: Random delay
         if: github.event_name == 'schedule'
@@ -41,7 +49,10 @@ jobs:
       - name: Sign
         run: |
           if [ "${{ github.event_name }}" = "schedule" ]; then
-            ./woffux sign --catch-up '1:08:30:in;1:13:30:out;1:14:15:in;1:17:30:out;2:08:30:in;2:13:30:out;2:14:15:in;2:17:30:out;3:08:30:in;3:13:30:out;3:14:15:in;3:17:30:out;4:08:30:in;4:13:30:out;4:14:15:in;4:17:30:out;5:08:00:in;5:15:00:out' --catch-up-timezone 'Europe/Madrid' --catch-up-window '2h'
+            ./woffux sign \
+              --catch-up '1:08:30:in;1:13:30:out;1:14:15:in;1:17:30:out;2:08:30:in;2:13:30:out;2:14:15:in;2:17:30:out;3:08:30:in;3:13:30:out;3:14:15:in;3:17:30:out;4:08:30:in;4:13:30:out;4:14:15:in;4:17:30:out;5:08:00:in;5:15:00:out' \
+              --catch-up-timezone 'Europe/Madrid' \
+              --catch-up-window '2h'
           else
             ./woffux sign
           fi
@@ -63,7 +74,8 @@ jobs:
           if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
             MSG="❌ woffux auto-sign failed at $(TZ=Europe/Madrid date '+%H:%M %Z %Y-%m-%d')"
             curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-              -d chat_id="${TELEGRAM_CHAT_ID}" -d text="${MSG}" > /dev/null
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MSG}" > /dev/null
           fi
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
