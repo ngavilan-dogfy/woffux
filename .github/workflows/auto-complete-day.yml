@@ -1,0 +1,97 @@
+name: Auto Complete Day
+
+# Fills today's presence slots in Woffu via API every weekday at 22:00 Europe/Madrid.
+#
+# GitHub cron has no timezone support, so we schedule both UTC offsets that
+# resolve to 22:00 Madrid (CEST/CET) and add a runtime guard that only proceeds
+# when the Madrid local hour is exactly 22.
+#
+# Required repository secrets:
+#   WOFFU_TOKEN     JWT bearer token
+#   WOFFU_USER_ID   Numeric user id
+# Optional secrets:
+#   WOFFU_BASE_URL          Default: https://app.woffu.com
+#   TELEGRAM_BOT_TOKEN      For failure notifications
+#   TELEGRAM_CHAT_ID        For failure notifications
+
+on:
+  schedule:
+    - cron: '0 20 * * 1-5'  # 22:00 Madrid (CEST, summer)
+    - cron: '0 21 * * 1-5'  # 22:00 Madrid (CET, winter)
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Generate slots but do not call the API'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: auto-complete-day
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  complete-day:
+    name: Complete day in Woffu
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Show trigger info
+        run: |
+          echo "event_name=${{ github.event_name }}"
+          echo "now_utc=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "now_madrid=$(TZ=Europe/Madrid date '+%Y-%m-%d %H:%M:%S %Z')"
+
+      - name: Madrid-time guard
+        id: guard
+        run: |
+          MADRID_HOUR=$(TZ=Europe/Madrid date '+%H')
+          if [ "${{ github.event_name }}" = "schedule" ] && [ "$MADRID_HOUR" != "22" ]; then
+            echo "Madrid hour=$MADRID_HOUR (not 22). Skipping this cron tick."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        if: steps.guard.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Random delay
+        if: steps.guard.outputs.skip != 'true' && github.event_name == 'schedule'
+        run: sleep $(( RANDOM % 300 + 1 ))
+
+      - name: Complete day
+        if: steps.guard.outputs.skip != 'true'
+        env:
+          WOFFU_TOKEN: ${{ secrets.WOFFU_TOKEN }}
+          WOFFU_USER_ID: ${{ secrets.WOFFU_USER_ID }}
+          WOFFU_BASE_URL: ${{ secrets.WOFFU_BASE_URL }}
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            node .github/scripts/woffu-complete-day.mjs --dry-run
+          else
+            node .github/scripts/woffu-complete-day.mjs
+          fi
+
+      - name: Notify failure
+        if: failure() && steps.guard.outputs.skip != 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            MSG="❌ woffu auto-complete-day failed at $(TZ=Europe/Madrid date '+%H:%M %Z %Y-%m-%d')"
+            curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -d chat_id="${TELEGRAM_CHAT_ID}" \
+              -d text="${MSG}" > /dev/null
+          fi

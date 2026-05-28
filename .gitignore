@@ -5,3 +5,5 @@
 .github/workflows/sign.yml
 .github/workflows/sign-manual.yml
 .github/workflows/keepalive.yml
+
+.idea/
