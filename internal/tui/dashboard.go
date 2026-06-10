@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ngavilan-dogfy/woffux/internal/agent"
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	gh "github.com/ngavilan-dogfy/woffux/internal/github"
 	"github.com/ngavilan-dogfy/woffux/internal/notify"
@@ -42,7 +43,12 @@ type dataMsg struct {
 	companyId    int
 }
 type errMsg struct{ err error }
-type signDoneMsg struct{}
+type signDoneMsg struct{ verified bool }
+type agentStatusMsg struct{ active bool }
+type agentToggleMsg struct {
+	enabled bool
+	err     error
+}
 type autoToggleMsg struct {
 	enabled bool
 	inSync  bool
@@ -53,6 +59,8 @@ type autoStatusMsg struct {
 	syncChecked bool
 	inSync      bool
 	syncErr     string
+	lastRunAt   time.Time
+	lastRunOK   bool
 }
 type syncDoneMsg struct{ reloaded bool }
 type presetAppliedMsg struct {
@@ -117,11 +125,15 @@ type Dashboard struct {
 	autoActive   *bool // nil = unknown
 	autoInSync   *bool // nil = unknown or not applicable
 	autoSyncErr  string
+	lastRunAt    time.Time // last scheduled GitHub run (zero = unknown)
+	lastRunOK    bool
+	agentActive  *bool // local launchd agent (nil = unknown/unsupported)
 	err          error
 	companyId    int
 
 	// UI state
 	activeTab   int
+	ticks       int
 	signing     bool
 	overlay     overlayKind
 	menuCursor  int
@@ -161,7 +173,16 @@ func (d *Dashboard) applyConfig(cfg *config.Config) {
 }
 
 func (d *Dashboard) Init() tea.Cmd {
-	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.tick())
+	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.fetchAgentStatus(), d.tick())
+}
+
+func (d *Dashboard) fetchAgentStatus() tea.Cmd {
+	if !agent.Supported() {
+		return nil
+	}
+	return func() tea.Msg {
+		return agentStatusMsg{active: agent.Installed() && agent.Loaded()}
+	}
 }
 
 // ── Update ──
@@ -216,8 +237,30 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case signDoneMsg:
 		d.signing = false
-		d.setFlash("Signed successfully! Data refreshing...", false)
+		if msg.verified {
+			d.setFlash("Signed and verified ✓", false)
+		} else {
+			d.setFlash("Signed (verification unavailable)", false)
+		}
 		return d, tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.clearFlashAfter(3*time.Second))
+
+	case agentStatusMsg:
+		v := msg.active
+		d.agentActive = &v
+
+	case agentToggleMsg:
+		if msg.err != nil {
+			d.setFlash(fmt.Sprintf("Local agent: %s", msg.err), true)
+			return d, tea.Batch(d.fetchAgentStatus(), d.clearFlashAfter(5*time.Second))
+		}
+		v := msg.enabled
+		d.agentActive = &v
+		if msg.enabled {
+			d.setFlash("Local agent enabled — signs fire on time while this Mac is awake", false)
+		} else {
+			d.setFlash("Local agent disabled", false)
+		}
+		return d, d.clearFlashAfter(3 * time.Second)
 
 	case autoToggleMsg:
 		v := msg.enabled
@@ -243,6 +286,8 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		v := msg.enabled
 		d.autoActive = &v
 		d.autoSyncErr = msg.syncErr
+		d.lastRunAt = msg.lastRunAt
+		d.lastRunOK = msg.lastRunOK
 		if msg.syncChecked {
 			inSync := msg.inSync
 			d.autoInSync = &inSync
@@ -305,6 +350,13 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.flash = ""
 
 	case tickMsg:
+		d.ticks++
+		// Refresh data every 5 minutes so signs made elsewhere (mobile,
+		// local agent, GitHub) show up without pressing 'r'. Skip while an
+		// overlay is open or a sign is in flight.
+		if d.ticks%5 == 0 && d.overlay == overlayNone && !d.signing && !d.loading {
+			return d, tea.Batch(d.tick(), d.fetchData(), d.fetchAgentStatus())
+		}
 		return d, d.tick()
 	}
 
@@ -932,10 +984,43 @@ func (d *Dashboard) renderAutoSign() string {
 	}
 
 	header := d.renderSectionLine("Schedule")
-	autoLine := "  " + sDimmed.Render("Auto-sign") + "  " + status
-	if d.cfg.ActiveSchedule != "" {
-		autoLine += "    " + sDimmed.Render("preset:") + " " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(d.cfg.ActiveSchedule)
+	autoLine := "  " + sDimmed.Render("GitHub   ") + "  " + status
+	if d.autoActive != nil && *d.autoActive && !d.lastRunAt.IsZero() {
+		ago := time.Since(d.lastRunAt).Round(time.Minute)
+		agoStr := formatDurationShort(ago)
+		runInfo := fmt.Sprintf("last run %s ago", agoStr)
+		if !d.lastRunOK {
+			runInfo += " (failed)"
+		}
+		// GitHub cron silence during work hours means signs depend on the
+		// local agent / catch-up; surface it.
+		style := sDimmed
+		if ago > 3*time.Hour && isWorkHoursNow() {
+			style = lipgloss.NewStyle().Foreground(colorWarning)
+		} else if !d.lastRunOK {
+			style = lipgloss.NewStyle().Foreground(colorWarning)
+		}
+		autoLine += "    " + style.Render(runInfo)
 	}
+
+	agentLine := ""
+	if agent.Supported() {
+		agentStatus := sDimmed.Render("checking...")
+		if d.agentActive != nil {
+			if *d.agentActive {
+				agentStatus = sSuccess.Render("● active") + sDimmed.Render(" · "+agent.MinutesLabel()) // ● ·
+			} else {
+				agentStatus = sDimmed.Render("○ off") // ○
+			}
+		}
+		agentLine = "\n  " + sDimmed.Render("This Mac ") + "  " + agentStatus
+	}
+
+	presetLine := ""
+	if d.cfg.ActiveSchedule != "" {
+		presetLine = "\n  " + sDimmed.Render("Preset   ") + "  " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(d.cfg.ActiveSchedule)
+	}
+	autoLine += agentLine + presetLine
 
 	// Show today's schedule times
 	todayLine := ""
@@ -965,6 +1050,28 @@ func (d *Dashboard) renderAutoSign() string {
 
 func (d *Dashboard) needsAutoSync() bool {
 	return d.autoActive != nil && *d.autoActive && d.autoInSync != nil && !*d.autoInSync
+}
+
+// formatDurationShort renders a duration as "45m" or "2h10m".
+func formatDurationShort(dur time.Duration) string {
+	if dur < 0 {
+		dur = 0
+	}
+	h := int(dur.Hours())
+	m := int(dur.Minutes()) % 60
+	if h == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dh%02dm", h, m)
+}
+
+func isWorkHoursNow() bool {
+	now := time.Now()
+	wd := now.Weekday()
+	if wd == time.Saturday || wd == time.Sunday {
+		return false
+	}
+	return now.Hour() >= 8 && now.Hour() < 18
 }
 
 // ── Render: footer help ──
@@ -1034,6 +1141,14 @@ func (d *Dashboard) getActions() []action {
 		actions = append(actions, action{key: "auto-off", name: "Disable auto-sign", desc: "Pause scheduled signing"})
 	default:
 		actions = append(actions, action{key: "auto-on", name: "Enable auto-sign", desc: "Sync and refresh cron triggers"})
+	}
+
+	if agent.Supported() {
+		if d.agentActive != nil && *d.agentActive {
+			actions = append(actions, action{key: "agent-off", name: "Disable local agent", desc: "Stop signing from this Mac"})
+		} else {
+			actions = append(actions, action{key: "agent-on", name: "Enable local agent", desc: "Sign on time from this Mac (GitHub stays as fallback)"})
+		}
 	}
 
 	// Schedule section
@@ -1138,6 +1253,10 @@ func (d *Dashboard) executeAction(a action) tea.Cmd {
 		return d.toggleAuto(true)
 	case "auto-off":
 		return d.toggleAuto(false)
+	case "agent-on":
+		return func() tea.Msg { return agentToggleMsg{enabled: true, err: agent.Install()} }
+	case "agent-off":
+		return func() tea.Msg { return agentToggleMsg{enabled: false, err: agent.Uninstall()} }
 	case "edit-schedule":
 		return d.editSchedule()
 	case "edit-config":
@@ -1293,7 +1412,7 @@ func (d *Dashboard) fetchData() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		token, err := woffu.Authenticate(client, companyClient, cfg.WoffuEmail, password)
+		token, err := woffu.AuthenticateCached(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
 			return errMsg{err}
 		}
@@ -1422,6 +1541,12 @@ func (d *Dashboard) fetchAutoStatus() tea.Cmd {
 			msg.syncChecked = true
 			msg.inSync = inSync
 		}
+		if createdAt, conclusion, ok, err := gh.LastScheduledRun(repo); err == nil && ok {
+			if t, parseErr := time.Parse(time.RFC3339, createdAt); parseErr == nil {
+				msg.lastRunAt = t
+				msg.lastRunOK = conclusion == "success"
+			}
+		}
 		return msg
 	}
 }
@@ -1451,12 +1576,22 @@ func (d *Dashboard) doSign() tea.Cmd {
 	tgCfg := notify.TelegramConfig{BotToken: d.cfg.Telegram.BotToken, ChatID: d.cfg.Telegram.ChatID}
 
 	return func() tea.Msg {
+		before, beforeErr := woffu.GetTodaySlots(companyClient, token)
 		err := woffu.DoSign(companyClient, token, info.Latitude, info.Longitude)
 		if err != nil {
+			_ = notify.SendFailedNotification(tgCfg, info.Date, fmt.Sprintf("Sign request failed: %s", err))
 			return errMsg{err}
 		}
+		verified := false
+		if beforeErr == nil {
+			if err := woffu.VerifySignRegistered(companyClient, token, woffu.IsSignedIn(before)); err != nil {
+				_ = notify.SendFailedNotification(tgCfg, info.Date, err.Error())
+				return errMsg{fmt.Errorf("sign NOT verified: %w", err)}
+			}
+			verified = true
+		}
 		_ = notify.SendSignedNotification(tgCfg, &info)
-		return signDoneMsg{}
+		return signDoneMsg{verified: verified}
 	}
 }
 

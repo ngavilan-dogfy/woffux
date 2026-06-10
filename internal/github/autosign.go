@@ -69,6 +69,32 @@ func autoSignEnabledFromWorkflows(workflows []WorkflowStatus) (enabled bool, fou
 	return false, false
 }
 
+// LastScheduledRun returns when the Auto Sign workflow last ran on a
+// schedule trigger and its conclusion ("success", "failure", ...).
+// Returns ok=false when there are no scheduled runs.
+func LastScheduledRun(repo string) (createdAt string, conclusion string, ok bool, err error) {
+	token, err := tokenForRepo(repo)
+	if err != nil {
+		return "", "", false, err
+	}
+
+	out, err := ghOutputWithToken(token, "api",
+		fmt.Sprintf("repos/%s/actions/workflows/sign.yml/runs?event=schedule&per_page=1", repo),
+		"--jq", `.workflow_runs[0] | "\(.created_at)\t\(.conclusion)"`)
+	if err != nil {
+		return "", "", false, fmt.Errorf("could not check last run: %w", err)
+	}
+	out = strings.TrimSpace(out)
+	if out == "" || out == "null\tnull" {
+		return "", "", false, nil
+	}
+	parts := strings.SplitN(out, "\t", 2)
+	if len(parts) != 2 {
+		return "", "", false, nil
+	}
+	return parts[0], parts[1], true, nil
+}
+
 // EnableAutoSign enables all sign workflows on the fork.
 func EnableAutoSign(repo string) error {
 	token, err := tokenForRepo(repo)
