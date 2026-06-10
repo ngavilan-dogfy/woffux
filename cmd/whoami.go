@@ -23,7 +23,7 @@ var whoamiCmd = &cobra.Command{
 		client := woffu.NewWoffuClient(cfg.WoffuURL)
 		companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
 
-		token, err := woffu.Authenticate(client, companyClient, cfg.WoffuEmail, password)
+		token, err := woffu.AuthenticateCached(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
 			return fmt.Errorf("auth failed: %w\n\n  If your credentials changed, run 'woffux setup'", err)
 		}
