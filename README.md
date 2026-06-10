@@ -261,7 +261,24 @@ Keyboard shortcuts:
 
 ## Auto-signing
 
-GitHub Actions clocks you in/out on schedule. Toggle with `woffux auto on/off`.
+Two cooperating signers clock you in/out on schedule:
+
+- **Local agent (primary, macOS)** — `woffux agent on` installs a launchd
+  agent that runs every 15 minutes and signs the moment a scheduled event is
+  due. It reads the active schedule from your local config on every run, so
+  changing schedule or preset needs **no re-sync**. Signs fire on time
+  whenever your Mac is awake. Toggle with `woffux agent on/off`, inspect with
+  `woffux agent status`.
+- **GitHub Actions (fallback)** — cron-triggered workflow for when your Mac
+  is asleep. Toggle with `woffux auto on/off`. Note: GitHub cron schedules
+  are best-effort and routinely fire **hours** late or get dropped; treat
+  this as a safety net, not the primary signer.
+
+Both are idempotent: a scheduled event that already has a matching sign is
+never signed again, so the two can't double-toggle each other.
+
+Every sign is **verified**: after signing, woffux re-reads today's slots and
+fails loudly (non-zero exit + Telegram alert) if Woffu didn't register it.
 
 | Day | Default times (CET) |
 |---|---|
