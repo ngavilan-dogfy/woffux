@@ -207,7 +207,9 @@ func scheduleEvents(schedule config.Schedule) []scheduleEvent {
 	return events
 }
 
-func catchUpSpec(schedule config.Schedule) string {
+// CatchUpSpec serializes the schedule as day:HH:MM:action entries for
+// woffux sign --catch-up.
+func CatchUpSpec(schedule config.Schedule) string {
 	events := scheduleEvents(schedule)
 	parts := make([]string, 0, len(events))
 	for _, event := range events {
@@ -325,7 +327,7 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 		ianaZone = alias
 	}
 
-	spec := catchUpSpec(schedule)
+	spec := CatchUpSpec(schedule)
 	signBlock := `if [ "${{ github.event_name }}" = "schedule" ]; then
             ./woffux sign --catch-up '%s' --catch-up-timezone '%s' --catch-up-window '2h'
           else

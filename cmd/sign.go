@@ -11,15 +11,18 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	gh "github.com/ngavilan-dogfy/woffux/internal/github"
 	"github.com/ngavilan-dogfy/woffux/internal/notify"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
 var signForce bool
 var signExpected string
+var signScheduled bool
 var signCatchUpSpec string
 var signCatchUpTimezone string
 var signCatchUpWindow time.Duration
+var signNoVerify bool
 
 type catchUpEvent struct {
 	day    int
@@ -57,13 +60,49 @@ In CI, reads credentials from environment variables.`,
 			return err
 		}
 
+		// --scheduled: catch-up against the local config's schedule. Unlike
+		// the baked --catch-up spec in the GitHub workflow, this always
+		// follows the currently active schedule/preset.
+		if signScheduled {
+			if signCatchUpSpec == "" {
+				signCatchUpSpec = gh.CatchUpSpec(cfg.Schedule)
+			}
+			if signCatchUpTimezone == "" {
+				signCatchUpTimezone = cfg.Timezone
+			}
+			if signCatchUpSpec == "" {
+				if isTTY() {
+					fmt.Println("No scheduled sign times configured — skipping.")
+				}
+				return nil
+			}
+		}
+
+		// Cheap pre-auth skip: in catch-up mode, if no event for today could
+		// possibly be overdue yet, exit without touching the network.
+		if strings.TrimSpace(signCatchUpSpec) != "" {
+			loc := catchUpLocation(signCatchUpTimezone, cfg.Timezone)
+			due, err := anyCatchUpEventDue(signCatchUpSpec, time.Now().In(loc), catchUpWindowOrDefault(signCatchUpWindow))
+			if err != nil {
+				return err
+			}
+			if !due {
+				if isTTY() {
+					fmt.Println("No scheduled sign due now — skipping.")
+				} else {
+					fmt.Printf("SKIP %s no scheduled sign due now\n", time.Now().In(loc).Format("2006-01-02 15:04"))
+				}
+				return nil
+			}
+		}
+
 		client := woffu.NewWoffuClient(cfg.WoffuURL)
 		companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
 
 		if isTTY() {
 			fmt.Println("Authenticating...")
 		}
-		token, err := woffu.Authenticate(client, companyClient, cfg.WoffuEmail, password)
+		token, err := woffu.AuthenticateCached(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
 			return fmt.Errorf("auth failed: %w", err)
 		}
@@ -108,18 +147,8 @@ In CI, reads credentials from environment variables.`,
 			if err := loadSlots(); err != nil {
 				return err
 			}
-			tz := strings.TrimSpace(signCatchUpTimezone)
-			if tz == "" {
-				tz = cfg.Timezone
-			}
-			loc, err := time.LoadLocation(tz)
-			if err != nil {
-				loc = time.Local
-			}
-			window := signCatchUpWindow
-			if window <= 0 {
-				window = 2 * time.Hour
-			}
+			loc := catchUpLocation(signCatchUpTimezone, cfg.Timezone)
+			window := catchUpWindowOrDefault(signCatchUpWindow)
 			action, matchedTime, ok, err := resolveCatchUpSignAction(signCatchUpSpec, slots, time.Now().In(loc), window)
 			if err != nil {
 				return err
@@ -162,13 +191,38 @@ In CI, reads credentials from environment variables.`,
 				info.Mode.Emoji(), info.Mode.Label(), info.Latitude, info.Longitude)
 		}
 
+		// Snapshot state before signing so the result can be verified.
+		var wasSignedIn bool
+		verify := !signNoVerify
+		if verify {
+			if err := loadSlots(); err != nil {
+				verify = false
+			} else {
+				wasSignedIn = woffu.IsSignedIn(slots)
+			}
+		}
+
 		err = woffu.DoSign(companyClient, token, info.Latitude, info.Longitude)
 		if err != nil {
+			_ = notify.SendFailedNotification(telegramCfg, info.Date, fmt.Sprintf("Sign request failed: %s", err))
 			return fmt.Errorf("sign failed: %w", err)
 		}
 
+		// Verify the sign actually registered: the in/out state must have
+		// flipped. Woffu occasionally accepts the POST without recording it.
+		if verify {
+			if err := woffu.VerifySignRegistered(companyClient, token, wasSignedIn); err != nil {
+				_ = notify.SendFailedNotification(telegramCfg, info.Date, err.Error())
+				return fmt.Errorf("sign NOT verified: %w", err)
+			}
+		}
+
 		if isTTY() {
-			fmt.Println("Signed successfully!")
+			if verify {
+				fmt.Println("Signed and verified!")
+			} else {
+				fmt.Println("Signed successfully!")
+			}
 		} else {
 			fmt.Printf("OK %s %s %s\n", info.Date, info.Mode, info.Mode.Label())
 		}
@@ -181,12 +235,58 @@ In CI, reads credentials from environment variables.`,
 	},
 }
 
+// catchUpLocation resolves the timezone for catch-up scheduling.
+func catchUpLocation(tz, fallback string) *time.Location {
+	name := strings.TrimSpace(tz)
+	if name == "" {
+		name = strings.TrimSpace(fallback)
+	}
+	if loc, err := time.LoadLocation(name); err == nil && name != "" {
+		return loc
+	}
+	return time.Local
+}
+
+func catchUpWindowOrDefault(window time.Duration) time.Duration {
+	if window <= 0 {
+		return 2 * time.Hour
+	}
+	return window
+}
+
+// anyCatchUpEventDue reports whether at least one scheduled event for today
+// is inside the catch-up window, regardless of sign state. Used to skip the
+// network round-trips entirely when nothing can possibly be due.
+func anyCatchUpEventDue(spec string, now time.Time, window time.Duration) (bool, error) {
+	events, err := parseCatchUpSpec(spec)
+	if err != nil {
+		return false, err
+	}
+	day := int(now.Weekday())
+	if day == 0 {
+		day = 7
+	}
+	nowMinute := now.Hour()*60 + now.Minute()
+	for _, event := range events {
+		if event.day != day {
+			continue
+		}
+		delta := nowMinute - event.minute
+		if delta >= 0 && time.Duration(delta)*time.Minute <= window {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func init() {
 	signCmd.Flags().BoolVar(&signForce, "force", false, "Sign even if not a working day")
 	signCmd.Flags().StringVar(&signExpected, "expected", "", "Expected sign action: 'in' or 'out'. Skips if already in that state.")
 	signCmd.Flags().StringVar(&signCatchUpSpec, "catch-up", "", "Scheduled catch-up spec: day:HH:MM:action entries separated by semicolons.")
 	signCmd.Flags().StringVar(&signCatchUpTimezone, "catch-up-timezone", "", "Timezone used to resolve catch-up schedules.")
 	signCmd.Flags().DurationVar(&signCatchUpWindow, "catch-up-window", 2*time.Hour, "How long after a scheduled sign catch-up may run.")
+	signCmd.Flags().BoolVar(&signScheduled, "scheduled", false, "Catch-up mode against the local config's active schedule (used by the local agent).")
+	signCmd.Flags().BoolVar(&signNoVerify, "no-verify", false, "Skip post-sign verification.")
 }
 
 func parseExpectedSignAction(value string) (woffu.SignAction, error) {

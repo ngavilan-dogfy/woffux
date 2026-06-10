@@ -49,6 +49,18 @@ func SendSkippedNotification(cfg TelegramConfig, date, reason string) error {
 	return sendTelegram(cfg, text)
 }
 
+// SendFailedNotification sends a Telegram message when a sign fails or
+// cannot be verified.
+func SendFailedNotification(cfg TelegramConfig, date, reason string) error {
+	if !cfg.IsConfigured() {
+		return nil
+	}
+
+	text := fmt.Sprintf("❌ Fichaje fallido\n📅 %s\n📝 %s", date, reason)
+
+	return sendTelegram(cfg, text)
+}
+
 func sendTelegram(cfg TelegramConfig, text string) error {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", cfg.BotToken)
 

@@ -97,6 +97,7 @@ func init() {
 	rootCmd.AddCommand(scheduleCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(autoCmd)
+	rootCmd.AddCommand(agentCmd)
 	rootCmd.AddCommand(updateCmd)
 }
 

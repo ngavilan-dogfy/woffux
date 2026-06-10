@@ -56,6 +56,28 @@ func DoSign(companyClient *Client, token string, lat, lon float64) error {
 	return nil
 }
 
+// VerifySignRegistered polls today's slots until the signed-in state flips
+// from its pre-sign value. Woffu occasionally accepts the sign POST without
+// recording it; callers should treat an error as "sign not registered".
+func VerifySignRegistered(companyClient *Client, token string, wasSignedIn bool) error {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		after, err := GetTodaySlots(companyClient, token)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if IsSignedIn(after) != wasSignedIn {
+			return nil
+		}
+		lastErr = fmt.Errorf("sign sent but Woffu still reports signed_in=%v", wasSignedIn)
+	}
+	return lastErr
+}
+
 func currentTimezoneOffset() int {
 	// Try to use Europe/Madrid for consistent offset
 	loc, err := time.LoadLocation("Europe/Madrid")
