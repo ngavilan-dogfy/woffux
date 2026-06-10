@@ -234,6 +234,9 @@ func resolveCatchUpSignAction(spec string, slots []woffu.SignSlot, now time.Time
 		if delta < 0 || time.Duration(delta)*time.Minute > window {
 			continue
 		}
+		if catchUpEventSatisfied(slots, event) {
+			continue
+		}
 		if delta < bestDelta {
 			bestDelta = delta
 			best = event
@@ -245,6 +248,48 @@ func resolveCatchUpSignAction(spec string, slots []woffu.SignSlot, now time.Time
 		return "", "", false, nil
 	}
 	return best.action, best.label, true, nil
+}
+
+// catchUpSatisfiedSlackMinutes tolerates signs made slightly before their
+// scheduled time (e.g. a manual early sign) still counting as that event.
+const catchUpSatisfiedSlackMinutes = 5
+
+// catchUpEventSatisfied reports whether a scheduled event already has a
+// matching sign today at (or after) its scheduled time. Without this check,
+// duplicate DST-offset crons and the 15-minute watchdog re-match events that
+// already happened and toggle the user in/out repeatedly.
+func catchUpEventSatisfied(slots []woffu.SignSlot, event catchUpEvent) bool {
+	for _, slot := range slots {
+		var stamp string
+		switch event.action {
+		case woffu.SignActionIn:
+			stamp = slot.In
+		case woffu.SignActionOut:
+			stamp = slot.Out
+		}
+		minute, ok := slotMinuteOfDay(stamp)
+		if !ok {
+			continue
+		}
+		if minute >= event.minute-catchUpSatisfiedSlackMinutes {
+			return true
+		}
+	}
+	return false
+}
+
+// slotMinuteOfDay parses a Woffu local timestamp ("2026-06-10T08:46:52" or
+// with milliseconds) and returns the minute of day.
+func slotMinuteOfDay(stamp string) (int, bool) {
+	if stamp == "" {
+		return 0, false
+	}
+	for _, layout := range []string{"2006-01-02T15:04:05.000", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, stamp); err == nil {
+			return t.Hour()*60 + t.Minute(), true
+		}
+	}
+	return 0, false
 }
 
 func parseCatchUpSpec(spec string) ([]catchUpEvent, error) {
