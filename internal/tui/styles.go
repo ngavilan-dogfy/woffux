@@ -84,13 +84,6 @@ var (
 	sSectionHeader = lipgloss.NewStyle().
 			Foreground(colorDim)
 
-	// Info box with nicer border and padding
-	sInfoBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorSeparator).
-			Padding(1, 3).
-			MarginLeft(2)
-
 	sLiveIndicator = lipgloss.NewStyle().
 			Foreground(colorSuccess).
 			Bold(true)

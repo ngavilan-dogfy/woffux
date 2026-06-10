@@ -39,6 +39,7 @@ type dataMsg struct {
 	profile      *woffu.UserProfile
 	slots        []woffu.SignSlot
 	calendarDays []woffu.CalendarDay
+	monthSigns   []woffu.SignRecord
 	userId       int
 	companyId    int
 }
@@ -98,11 +99,13 @@ type requestDoneMsg struct {
 }
 
 const (
-	overlayNone       overlayKind = iota
-	overlayMenu                   // action menu
-	overlayCalAction              // calendar batch action picker
-	overlayDayAction              // single day context menu
-	overlaySavePreset             // save-as-preset text input
+	overlayNone        overlayKind = iota
+	overlayMenu                    // action menu
+	overlayCalAction               // calendar batch action picker
+	overlayDayAction               // single day context menu
+	overlaySavePreset              // save-as-preset text input
+	overlayConfirmSign             // confirm before signing
+	overlayHelp                    // keyboard shortcuts
 )
 
 // ── Dashboard model ──
@@ -122,6 +125,7 @@ type Dashboard struct {
 	profile      *woffu.UserProfile
 	slots        []woffu.SignSlot
 	calendarDays []woffu.CalendarDay
+	monthSigns   []woffu.SignRecord
 	autoActive   *bool // nil = unknown
 	autoInSync   *bool // nil = unknown or not applicable
 	autoSyncErr  string
@@ -204,6 +208,7 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.profile = msg.profile
 		d.slots = msg.slots
 		d.calendarDays = msg.calendarDays
+		d.monthSigns = msg.monthSigns
 		d.userId = msg.userId
 		d.companyId = msg.companyId
 		if d.cal == nil && len(msg.calendarDays) > 0 {
@@ -434,6 +439,24 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d, nil
 	}
 
+	// ── Overlay: confirm sign ──
+	if d.overlay == overlayConfirmSign {
+		switch key {
+		case "enter", "y", "s":
+			d.overlay = overlayNone
+			return d, d.confirmSign()
+		case "esc", "n", "q":
+			d.overlay = overlayNone
+		}
+		return d, nil
+	}
+
+	// ── Overlay: help ──
+	if d.overlay == overlayHelp {
+		d.overlay = overlayNone // any key closes
+		return d, nil
+	}
+
 	// ── Overlay: action menu ──
 	if d.overlay == overlayMenu {
 		actions := d.getActions()
@@ -550,6 +573,8 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		d.overlay = overlayMenu
 		d.menuCursor = firstSelectableAction(d.getActions())
+	case "?":
+		d.overlay = overlayHelp
 	case "s":
 		return d, d.trySign()
 	case "a":
@@ -651,9 +676,94 @@ func (d *Dashboard) View() string {
 		return d.renderDayActionOverlay()
 	case overlaySavePreset:
 		return d.renderSavePresetOverlay()
+	case overlayConfirmSign:
+		return d.renderConfirmSignOverlay()
+	case overlayHelp:
+		return d.renderHelpOverlay()
 	}
 
 	return dashboard
+}
+
+// renderConfirmSignOverlay asks for confirmation before signing, showing
+// the direction the sign will take.
+func (d *Dashboard) renderConfirmSignOverlay() string {
+	action := d.pendingSignAction()
+	actionStyled := sSuccess.Render("▶ IN")
+	if action == "OUT" {
+		actionStyled = sDanger.Render("■ OUT")
+	}
+
+	title := sOverlayTitle.Render("◆ Sign now")
+
+	question := "  Clock " + actionStyled + lipgloss.NewStyle().Foreground(colorText).Bold(true).Render(" now?")
+
+	var detail string
+	if d.signInfo != nil {
+		modeStyle := sDimmed
+		if d.signInfo.Mode == woffu.SignModeRemote {
+			modeStyle = lipgloss.NewStyle().Foreground(colorSuccess)
+		}
+		detail = "  " + modeStyle.Render(fmt.Sprintf("%s %s", d.signInfo.Mode.Emoji(), d.signInfo.Mode.Label())) +
+			sDimmed.Render(fmt.Sprintf("  ·  %s", time.Now().Format("15:04")))
+	}
+
+	hints := lipgloss.NewStyle().Foreground(colorDim).Render("  ⏎ confirm   esc cancel")
+
+	content := title + "\n\n" + question + "\n" + detail + "\n\n" + hints
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorWarning).
+		Padding(1, 2).
+		Render(content)
+
+	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// renderHelpOverlay lists every keyboard shortcut.
+func (d *Dashboard) renderHelpOverlay() string {
+	title := sOverlayTitle.Render("◆ Keyboard shortcuts")
+
+	group := func(name string) string {
+		return "\n" + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render("  "+name)
+	}
+	row := func(key, desc string) string {
+		return "  " + sKey.Render(lipgloss.NewStyle().Width(12).Render(key)) + sHint.Render(desc)
+	}
+
+	lines := []string{
+		title,
+		group("General"),
+		row("tab / 1 2 3", "switch tab"),
+		row("⏎", "action menu"),
+		row("r", "refresh data"),
+		row("?", "this help"),
+		row("q", "quit"),
+		group("Signing"),
+		row("s", "sign in/out (asks to confirm)"),
+		row("a", "toggle GitHub auto-sign"),
+		group("Calendar"),
+		row("←→↑↓", "move"),
+		row("space", "select day"),
+		row("shift+arrows", "extend selection"),
+		row("x", "clear selection"),
+		row("[ / ]", "previous / next month"),
+		row("⏎", "day or batch actions"),
+		group("Browser"),
+		row("o", "open Woffu"),
+		row("g", "open GitHub Actions"),
+		"",
+		lipgloss.NewStyle().Foreground(colorDim).Render("  press any key to close"),
+	}
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorPrimary).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+
+	return lipgloss.Place(d.width, d.height, lipgloss.Center, lipgloss.Center, box)
 }
 
 // ── Render: header ──
@@ -740,28 +850,8 @@ func (d *Dashboard) renderStatusTab() string {
 	}
 	parts = append(parts, "\n  "+sSubtitle.Render(greetText))
 
-	// Compact info box: date + mode + clocked status — with generous padding
-	if d.signInfo != nil {
-		info := d.signInfo
-
-		shortDate := info.Date
-		if t, err := time.Parse("2006-01-02", info.Date); err == nil {
-			shortDate = t.Format("Mon, 2 January 2006")
-		}
-
-		modeStyle := sDimmed
-		if info.Mode == woffu.SignModeRemote {
-			modeStyle = sSuccess
-		}
-		modeText := modeStyle.Render(fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
-
-		clockStatus := d.signStatusText()
-
-		row1 := sValue.Render(shortDate)
-		row2 := modeText + "    " + clockStatus
-
-		parts = append(parts, "\n"+sInfoBox.Render(row1+"\n"+row2))
-	}
+	// Hero: the one-glance answer — am I in, since when, how much today.
+	parts = append(parts, "\n"+d.renderHero())
 
 	// Progress bar -- always visible when we have a target, even with 0 slots
 	worked, clockedIn := d.hoursWorkedToday()
@@ -778,17 +868,29 @@ func (d *Dashboard) renderStatusTab() string {
 		}
 
 		bar := renderProgressBar(worked, target, 30)
-		label := "  Today's progress"
-		if clockedIn {
-			label += "  " + sLiveIndicator.Render("\u25CF live") // ●
-		}
-
 		progressLine := "  " + lipgloss.NewStyle().Foreground(barColor).Render(bar) +
 			"  " + sValue.Render(formatDuration(worked)) +
 			sDimmed.Render(" / "+formatDuration(target)) +
-			sDimmed.Render(fmt.Sprintf("  (%d%%)", pct))
+			sDimmed.Render(fmt.Sprintf(" (%d%%)", pct))
+		if clockedIn {
+			progressLine += "  " + sLiveIndicator.Render("\u25CF live") // ●
+		}
 
-		parts = append(parts, "\n"+sSubtitle.Render(label)+"\n"+progressLine)
+		todayBlock := "\n" + d.renderSectionLine("Today") + "\n" + progressLine
+
+		// Week so far vs weekly target (only when we have history to add).
+		if weekTarget := d.weeklyTargetHours(); weekTarget > 0 {
+			weekWorked := d.weekWorkedHours()
+			if weekWorked > worked { // more than just today → history present
+				_, isoWeek := time.Now().ISOWeek()
+				weekLine := "  " + sDimmed.Render(fmt.Sprintf("Week %d", isoWeek)) + "  " +
+					sValue.Render(formatDuration(weekWorked)) +
+					sDimmed.Render(" / "+formatDuration(weekTarget))
+				todayBlock += "\n" + weekLine
+			}
+		}
+
+		parts = append(parts, todayBlock)
 	}
 
 	// Timeline (today's signs as a vertical timeline)
@@ -803,20 +905,57 @@ func (d *Dashboard) renderStatusTab() string {
 	return strings.Join(parts, "\n")
 }
 
-func (d *Dashboard) signStatusText() string {
+// renderHero shows the one-glance answer: current in/out state, since when,
+// hours worked, plus date and mode. A colored left bar carries the state.
+func (d *Dashboard) renderHero() string {
+	stateColor := colorMuted
+	stateLine := sDimmed.Render("○ ") + lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("OUT")
+
+	worked, _ := d.hoursWorkedToday()
+
 	if len(d.slots) == 0 {
-		return sDimmed.Render("○") + " " + sDanger.Render("not signed")
+		if d.signInfo != nil && d.signInfo.IsWorkingDay {
+			stateColor = colorDanger
+			stateLine = sDanger.Render("○ NOT SIGNED YET")
+		} else {
+			stateLine = sDimmed.Render("○ ") + lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("OUT") + sDimmed.Render(" — day off")
+		}
+	} else {
+		last := d.slots[len(d.slots)-1]
+		if last.In != "" && last.Out == "" {
+			stateColor = colorSuccess
+			since := extractTime(last.In)
+			stateLine = sSuccess.Render("● IN") + sDimmed.Render(" since ") + sValue.Render(since)
+		} else {
+			stateColor = colorMuted
+			since := extractTime(last.Out)
+			stateLine = lipgloss.NewStyle().Foreground(colorMuted).Bold(true).Render("○ OUT") + sDimmed.Render(" since ") + sValue.Render(since)
+		}
+		if worked > 0 {
+			stateLine += sDimmed.Render(" · worked ") + sValue.Render(formatDuration(worked))
+		}
 	}
 
-	lastSlot := d.slots[len(d.slots)-1]
-	if lastSlot.Out != "" {
-		return sDimmed.Render("○") + " " + sDimmed.Render("clocked out")
+	// Second line: date · mode
+	var meta []string
+	if d.signInfo != nil {
+		if t, err := time.Parse("2006-01-02", d.signInfo.Date); err == nil {
+			meta = append(meta, t.Format("Mon, 2 January"))
+		}
+		modeStyle := sDimmed
+		if d.signInfo.Mode == woffu.SignModeRemote {
+			modeStyle = lipgloss.NewStyle().Foreground(colorSuccess)
+		}
+		meta = append(meta, modeStyle.Render(fmt.Sprintf("%s %s", d.signInfo.Mode.Emoji(), d.signInfo.Mode.Label())))
 	}
-	if lastSlot.In != "" {
-		return sLiveIndicator.Render("●") + " " + sSuccess.Render("clocked in")
-	}
+	metaLine := sDimmed.Render(strings.Join(meta, "  ·  "))
 
-	return sDimmed.Render("○") + " " + sDimmed.Render(fmt.Sprintf("%d slots", len(d.slots)))
+	return lipgloss.NewStyle().
+		Border(lipgloss.ThickBorder(), false, false, false, true).
+		BorderForeground(stateColor).
+		PaddingLeft(2).
+		MarginLeft(2).
+		Render(stateLine + "\n" + metaLine)
 }
 
 func (d *Dashboard) renderSlots() string {
@@ -896,13 +1035,55 @@ func (d *Dashboard) renderEventsTab() string {
 		return "\n" + sDimmed.Render("  No events available.")
 	}
 
+	// Scale mini-bars against the largest pool so magnitudes compare at a glance.
+	maxAvail := 0.0
+	for _, e := range d.events {
+		if e.Available > maxAvail {
+			maxAvail = e.Available
+		}
+	}
+
 	var rows []string
 	for _, e := range d.events {
-		name := lipgloss.NewStyle().Foreground(colorMuted).Width(40).Render(e.Name)
-		val := sValue.Render(fmt.Sprintf("%6.0f %s", e.Available, e.Unit))
-		rows = append(rows, "  "+name+val)
+		icon := eventIcon(e.Name)
+		name := lipgloss.NewStyle().Foreground(colorText).Width(28).Render(e.Name)
+
+		valStyle := sSuccess
+		if e.Available <= 0 {
+			valStyle = sDimmed
+		}
+		valText := fmt.Sprintf("%5.1f", e.Available)
+		if strings.HasSuffix(valText, ".0") {
+			valText = strings.TrimSuffix(valText, ".0") + "  "
+		}
+		val := valStyle.Render(valText)
+		unit := lipgloss.NewStyle().Foreground(colorMuted).Width(7).Render(" " + e.Unit)
+
+		barWidth := 0
+		if maxAvail > 0 {
+			barWidth = int(e.Available / maxAvail * 20)
+		}
+		bar := lipgloss.NewStyle().Foreground(colorSecondary).Render(strings.Repeat("▰", barWidth)) +
+			sDimmed.Render(strings.Repeat("▱", 20-barWidth))
+
+		rows = append(rows, fmt.Sprintf("  %s %s %s%s  %s", icon, name, val, unit, bar))
 	}
-	return "\n" + sSubtitle.Render("  Available events") + "\n" + strings.Join(rows, "\n")
+	return "\n" + d.renderSectionLine("Available balance") + "\n" + strings.Join(rows, "\n")
+}
+
+// eventIcon picks a glyph for a Woffu event pool by name.
+func eventIcon(name string) string {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.Contains(lower, "vacacion"), strings.Contains(lower, "holiday"):
+		return "🏖"
+	case strings.Contains(lower, "hora"), strings.Contains(lower, "hour"):
+		return "⏳"
+	case strings.Contains(lower, "asunto"), strings.Contains(lower, "personal"):
+		return "🪪"
+	default:
+		return "📅"
+	}
 }
 
 // ── Render: Calendar tab ──
@@ -983,8 +1164,9 @@ func (d *Dashboard) renderAutoSign() string {
 		status = sDimmed.Render("not set up")
 	}
 
-	header := d.renderSectionLine("Schedule")
-	autoLine := "  " + sDimmed.Render("GitHub   ") + "  " + status
+	header := d.renderSectionLine("Auto-sign")
+
+	githubLine := "  " + sDimmed.Render("GitHub   ") + "  " + status
 	if d.autoActive != nil && *d.autoActive && !d.lastRunAt.IsZero() {
 		ago := time.Since(d.lastRunAt).Round(time.Minute)
 		agoStr := formatDurationShort(ago)
@@ -1000,7 +1182,7 @@ func (d *Dashboard) renderAutoSign() string {
 		} else if !d.lastRunOK {
 			style = lipgloss.NewStyle().Foreground(colorWarning)
 		}
-		autoLine += "    " + style.Render(runInfo)
+		githubLine += sDimmed.Render(" · ") + style.Render(runInfo)
 	}
 
 	agentLine := ""
@@ -1008,19 +1190,20 @@ func (d *Dashboard) renderAutoSign() string {
 		agentStatus := sDimmed.Render("checking...")
 		if d.agentActive != nil {
 			if *d.agentActive {
-				agentStatus = sSuccess.Render("● active") + sDimmed.Render(" · "+agent.MinutesLabel()) // ● ·
+				agentStatus = sSuccess.Render("● active") + sDimmed.Render(" · signs at "+agent.MinutesLabel())
 			} else {
-				agentStatus = sDimmed.Render("○ off") // ○
+				agentStatus = sDimmed.Render("○ off") + sDimmed.Render(" · enable from menu (⏎)")
 			}
 		}
-		agentLine = "\n  " + sDimmed.Render("This Mac ") + "  " + agentStatus
+		agentLine = "  " + sDimmed.Render("This Mac ") + "  " + agentStatus + "\n"
 	}
 
 	presetLine := ""
 	if d.cfg.ActiveSchedule != "" {
 		presetLine = "\n  " + sDimmed.Render("Preset   ") + "  " + lipgloss.NewStyle().Foreground(colorAccent).Bold(true).Render(d.cfg.ActiveSchedule)
 	}
-	autoLine += agentLine + presetLine
+	// Local agent first: it is the primary signer.
+	autoLine := agentLine + githubLine + presetLine
 
 	// Show today's schedule times
 	todayLine := ""
@@ -1050,6 +1233,68 @@ func (d *Dashboard) renderAutoSign() string {
 
 func (d *Dashboard) needsAutoSync() bool {
 	return d.autoActive != nil && *d.autoActive && d.autoInSync != nil && !*d.autoInSync
+}
+
+// weekWorkedHours sums worked time Monday..yesterday from the month's sign
+// records, plus today's live slots. Records outside the current week (or a
+// navigated calendar month) simply don't match and are ignored.
+func (d *Dashboard) weekWorkedHours() time.Duration {
+	now := time.Now()
+	weekday := int(now.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	monday := now.AddDate(0, 0, -(weekday - 1))
+
+	total := time.Duration(0)
+	for offset := 0; offset < weekday-1; offset++ {
+		day := monday.AddDate(0, 0, offset).Format("2006-01-02")
+		var inAt time.Time
+		hasIn := false
+		for _, rec := range d.monthSigns {
+			if rec.Date != day {
+				continue
+			}
+			t, err := time.Parse("15:04", rec.Time)
+			if err != nil {
+				continue
+			}
+			if rec.Type == "in" {
+				inAt = t
+				hasIn = true
+			} else if hasIn {
+				if diff := t.Sub(inAt); diff > 0 {
+					total += diff
+				}
+				hasIn = false
+			}
+		}
+	}
+
+	today, _ := d.hoursWorkedToday()
+	return total + today
+}
+
+// weeklyTargetHours sums the scheduled hours of all enabled weekdays.
+func (d *Dashboard) weeklyTargetHours() time.Duration {
+	total := time.Duration(0)
+	for wd := time.Monday; wd <= time.Friday; wd++ {
+		sched, enabled := d.scheduleForWeekday(wd)
+		if !enabled {
+			continue
+		}
+		for i := 0; i+1 < len(sched.Times); i += 2 {
+			in, errIn := time.Parse("15:04", sched.Times[i].Time)
+			out, errOut := time.Parse("15:04", sched.Times[i+1].Time)
+			if errIn != nil || errOut != nil {
+				continue
+			}
+			if diff := out.Sub(in); diff > 0 {
+				total += diff
+			}
+		}
+	}
+	return total
 }
 
 // formatDurationShort renders a duration as "45m" or "2h10m".
@@ -1093,7 +1338,7 @@ func (d *Dashboard) renderHelp() string {
 		left = []string{footerHint("\u2190\u2192\u2191\u2193", "move"), footerHint("space", "select"), footerHint("H/L", "month")} // ←→↑↓
 	}
 
-	right = []string{footerHint("\u23CE", "menu"), footerHint("tab", "switch"), footerHint("q", "quit")} // ⏎
+	right = []string{footerHint("\u23CE", "menu"), footerHint("tab", "switch"), footerHint("?", "help"), footerHint("q", "quit")} // ⏎
 
 	leftStr := strings.Join(left, lipgloss.NewStyle().Background(colorFooterBg).Render("  "))
 	rightStr := strings.Join(right, lipgloss.NewStyle().Background(colorFooterBg).Render("  "))
@@ -1466,7 +1711,7 @@ func (d *Dashboard) fetchData() tea.Cmd {
 			return errMsg{eventsErr}
 		}
 
-		return dataMsg{token: token, signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, userId: userId, companyId: companyId}
+		return dataMsg{token: token, signInfo: info, events: events, profile: profile, slots: slots, calendarDays: calDays, monthSigns: signs, userId: userId, companyId: companyId}
 	}
 }
 
@@ -1551,6 +1796,8 @@ func (d *Dashboard) fetchAutoStatus() tea.Cmd {
 	}
 }
 
+// trySign opens the sign confirmation overlay (signing is irreversible in
+// Woffu, so never fire it from a single accidental keypress).
 func (d *Dashboard) trySign() tea.Cmd {
 	if d.signing {
 		return nil
@@ -1559,9 +1806,26 @@ func (d *Dashboard) trySign() tea.Cmd {
 		d.setFlash("Not a working day", true)
 		return d.clearFlashAfter(3 * time.Second)
 	}
+	d.overlay = overlayConfirmSign
+	return nil
+}
+
+// confirmSign actually fires the sign after the user confirmed.
+func (d *Dashboard) confirmSign() tea.Cmd {
+	if d.signing {
+		return nil
+	}
 	d.signing = true
 	d.setFlash("Signing...", false)
 	return d.doSign()
+}
+
+// pendingSignAction tells which direction the next manual sign will take.
+func (d *Dashboard) pendingSignAction() string {
+	if woffu.IsSignedIn(d.slots) {
+		return "OUT"
+	}
+	return "IN"
 }
 
 func (d *Dashboard) doSign() tea.Cmd {
@@ -2273,15 +2537,20 @@ func (d *Dashboard) nextScheduledSign() string {
 	header := d.renderSectionLine("Next")
 	nextContent := fmt.Sprintf("%s %s  %s", marker, sValue.Render(next.Time), typeLabel)
 	if next.Missed {
+		missedText := "missed"
+		if d.anySignerActive() {
+			missedText = "missed · catch-up will retry" // ·
+		}
 		nextContent += "    " + lipgloss.NewStyle().
 			Foreground(colorDanger).
 			Bold(true).
-			Render("missed")
+			Render(missedText)
 	} else if next.Countdown != "" {
 		nextContent += "    " + lipgloss.NewStyle().
 			Foreground(colorWarning).
 			Bold(true).
 			Render("\u23F1 "+next.Countdown) // ⏱
+		nextContent += "   " + d.nextSignerLabel()
 	}
 
 	borderColor := colorDim
@@ -2296,6 +2565,28 @@ func (d *Dashboard) nextScheduledSign() string {
 		Render(nextContent)
 
 	return "\n" + header + "\n" + nextBox
+}
+
+// anySignerActive reports whether some auto-signer (local agent or GitHub)
+// is currently enabled.
+func (d *Dashboard) anySignerActive() bool {
+	if d.agentActive != nil && *d.agentActive {
+		return true
+	}
+	return d.autoActive != nil && *d.autoActive
+}
+
+// nextSignerLabel says who is going to perform the next scheduled sign —
+// the user's main trust question.
+func (d *Dashboard) nextSignerLabel() string {
+	switch {
+	case d.agentActive != nil && *d.agentActive:
+		return sDimmed.Render("via ") + sSuccess.Render("●") + sDimmed.Render(" This Mac")
+	case d.autoActive != nil && *d.autoActive:
+		return sDimmed.Render("via GitHub ") + lipgloss.NewStyle().Foreground(colorWarning).Render("(may run late)")
+	default:
+		return lipgloss.NewStyle().Foreground(colorDanger).Bold(true).Render("⚠ manual: no auto-sign")
+	}
 }
 
 func (d *Dashboard) nextScheduledSignAt(now time.Time) (scheduledSign, bool) {

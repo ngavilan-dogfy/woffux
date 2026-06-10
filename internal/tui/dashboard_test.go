@@ -6,9 +6,28 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
+
+func keyMsg(key string) tea.KeyMsg {
+	if len(key) == 1 {
+		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	}
+	switch key {
+	case "esc":
+		return tea.KeyMsg{Type: tea.KeyEsc}
+	case "enter":
+		return tea.KeyMsg{Type: tea.KeyEnter}
+	}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+}
+
+func stripAnsi(s string) string {
+	return ansiRe.ReplaceAllString(s, "")
+}
 
 func TestGetActionsSortsPresetNames(t *testing.T) {
 	d := &Dashboard{
@@ -292,6 +311,113 @@ func TestFormatDurationShort(t *testing.T) {
 		if got := formatDurationShort(dur); got != want {
 			t.Fatalf("formatDurationShort(%v) = %q, want %q", dur, got, want)
 		}
+	}
+}
+
+func TestTrySignOpensConfirmOverlay(t *testing.T) {
+	d := &Dashboard{
+		cfg:      &config.Config{},
+		signInfo: &woffu.SignInfo{IsWorkingDay: true},
+	}
+
+	if cmd := d.trySign(); cmd != nil {
+		t.Fatal("trySign should only open the confirm overlay")
+	}
+	if d.overlay != overlayConfirmSign {
+		t.Fatalf("overlay = %v, want confirm sign", d.overlay)
+	}
+}
+
+func TestConfirmSignOverlayEscCancels(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{}, overlay: overlayConfirmSign}
+
+	model, cmd := d.handleKey(keyMsg("esc"))
+	d = model.(*Dashboard)
+	if d.overlay != overlayNone {
+		t.Fatalf("overlay = %v, want none after esc", d.overlay)
+	}
+	if cmd != nil {
+		t.Fatal("esc must not trigger a sign")
+	}
+}
+
+func TestHelpOverlayOpensAndCloses(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{}, width: 80, height: 30}
+
+	model, _ := d.handleKey(keyMsg("?"))
+	d = model.(*Dashboard)
+	if d.overlay != overlayHelp {
+		t.Fatalf("overlay = %v, want help", d.overlay)
+	}
+	if !strings.Contains(stripAnsi(d.View()), "Keyboard shortcuts") {
+		t.Fatal("help overlay missing title")
+	}
+
+	model, _ = d.handleKey(keyMsg("x"))
+	d = model.(*Dashboard)
+	if d.overlay != overlayNone {
+		t.Fatal("any key should close help")
+	}
+}
+
+func TestPendingSignAction(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{}}
+	if got := d.pendingSignAction(); got != "IN" {
+		t.Fatalf("empty slots → %q, want IN", got)
+	}
+	d.slots = []woffu.SignSlot{{In: "2026-06-10T08:30:00"}}
+	if got := d.pendingSignAction(); got != "OUT" {
+		t.Fatalf("open slot → %q, want OUT", got)
+	}
+}
+
+func TestWeekWorkedHoursSumsHistoryAndToday(t *testing.T) {
+	now := time.Now()
+	if wd := now.Weekday(); wd == time.Monday || wd == time.Saturday || wd == time.Sunday {
+		t.Skip("needs at least one weekday of history this week")
+	}
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+	d := &Dashboard{
+		cfg: &config.Config{},
+		monthSigns: []woffu.SignRecord{
+			{Date: yesterday, Time: "08:00", Type: "in"},
+			{Date: yesterday, Time: "16:30", Type: "out"},
+		},
+	}
+
+	got := d.weekWorkedHours()
+	want := 8*time.Hour + 30*time.Minute
+	if got != want {
+		t.Fatalf("weekWorkedHours = %v, want %v", got, want)
+	}
+}
+
+func TestWeeklyTargetHours(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{Schedule: config.DefaultSchedule()}}
+	got := d.weeklyTargetHours()
+	if got <= 0 {
+		t.Fatalf("weeklyTargetHours = %v, want > 0", got)
+	}
+}
+
+func TestNextSignerLabelPrefersAgent(t *testing.T) {
+	agentOn := true
+	autoOn := true
+	d := &Dashboard{cfg: &config.Config{}, agentActive: &agentOn, autoActive: &autoOn}
+	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "This Mac") {
+		t.Fatal("agent active should label This Mac")
+	}
+
+	agentOff := false
+	d.agentActive = &agentOff
+	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "GitHub") {
+		t.Fatal("GitHub fallback label expected")
+	}
+
+	autoOff := false
+	d.autoActive = &autoOff
+	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "manual") {
+		t.Fatal("no signer should warn manual")
 	}
 }
 

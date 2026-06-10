@@ -18,7 +18,7 @@ type calendarGrid struct {
 	year     int
 	month    time.Month
 	days     []woffu.CalendarDay
-	cursor   int            // day of month (1-31), 0 = none
+	cursor   int             // day of month (1-31), 0 = none
 	selected map[string]bool // keyed by "YYYY-MM-DD" — persists across months
 	width    int
 }
@@ -303,7 +303,7 @@ func (c *calendarGrid) render() string {
 
 	// Month header — prominent with navigation arrows
 	monthName := strings.ToUpper(c.month.String())
-	leftArrow := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("\u25C0") // ◀
+	leftArrow := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("\u25C0")  // ◀
 	rightArrow := lipgloss.NewStyle().Foreground(colorDim).Bold(true).Render("\u25B6") // ▶
 	monthLabel := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(monthName)
 	yearLabel := lipgloss.NewStyle().Bold(true).Foreground(colorAccent).Render(fmt.Sprintf("%d", c.year))
