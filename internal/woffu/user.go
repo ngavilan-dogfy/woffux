@@ -18,6 +18,7 @@ type UserProfile struct {
 }
 
 type woffuUserFull struct {
+	UserID             int      `json:"UserId"`
 	FullName           string   `json:"FullName"`
 	Email              string   `json:"Email"`
 	CompanyName        string   `json:"CompanyName"`
@@ -48,6 +49,21 @@ func GetUserProfile(companyClient *Client, token string) (*UserProfile, error) {
 		OfficeLatitude:  data.OfficeLatitude,
 		OfficeLongitude: data.OfficeLongitude,
 	}, nil
+}
+
+// GetUserID fetches the numeric Woffu user ID for the authenticated user.
+func GetUserID(companyClient *Client, token string) (int, error) {
+	var data woffuUserFull
+	err := companyClient.doJSON("GET", "/api/users", nil, map[string]string{
+		"Authorization": "Bearer " + token,
+	}, &data)
+	if err != nil {
+		return 0, fmt.Errorf("get user id: %w", err)
+	}
+	if data.UserID == 0 {
+		return 0, fmt.Errorf("get user id: empty UserId in response")
+	}
+	return data.UserID, nil
 }
 
 // GetAvailableEvents returns the user's available events (vacations, hours, etc).
