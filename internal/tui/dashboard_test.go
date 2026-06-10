@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -230,6 +231,67 @@ func TestRenderAutoSignShowsSyncNeeded(t *testing.T) {
 	rendered := d.renderAutoSign()
 	if !strings.Contains(rendered, "sync needed") {
 		t.Fatalf("rendered auto-sign status missing sync warning:\n%s", rendered)
+	}
+}
+
+func TestRenderAutoSignShowsLastRunAge(t *testing.T) {
+	active := true
+	inSync := true
+	d := &Dashboard{
+		cfg:        &config.Config{GithubFork: "owner/woffux", Schedule: config.DefaultSchedule()},
+		autoActive: &active,
+		autoInSync: &inSync,
+		lastRunAt:  time.Now().Add(-90 * time.Minute),
+		lastRunOK:  true,
+		width:      100,
+	}
+
+	rendered := d.renderAutoSign()
+	if !strings.Contains(rendered, "last run 1h30m ago") {
+		t.Fatalf("rendered auto-sign missing last run age:\n%s", rendered)
+	}
+}
+
+func TestRenderAutoSignShowsLocalAgentState(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("local agent row only renders on macOS")
+	}
+	agentOn := true
+	d := &Dashboard{
+		cfg:         &config.Config{Schedule: config.DefaultSchedule()},
+		agentActive: &agentOn,
+		width:       100,
+	}
+
+	rendered := d.renderAutoSign()
+	if !strings.Contains(rendered, "This Mac") {
+		t.Fatalf("rendered auto-sign missing local agent row:\n%s", rendered)
+	}
+}
+
+func TestSignDoneVerifiedFlash(t *testing.T) {
+	d := &Dashboard{cfg: &config.Config{}, signing: true}
+
+	d.Update(signDoneMsg{verified: true})
+	if !strings.Contains(d.flash, "verified") {
+		t.Fatalf("expected verified flash, got %q", d.flash)
+	}
+	if d.signing {
+		t.Fatal("signing flag not cleared")
+	}
+}
+
+func TestFormatDurationShort(t *testing.T) {
+	cases := map[time.Duration]string{
+		45 * time.Minute:             "45m",
+		2*time.Hour + 10*time.Minute: "2h10m",
+		3 * time.Hour:                "3h00m",
+		-5 * time.Minute:             "0m",
+	}
+	for dur, want := range cases {
+		if got := formatDurationShort(dur); got != want {
+			t.Fatalf("formatDurationShort(%v) = %q, want %q", dur, got, want)
+		}
 	}
 }
 
