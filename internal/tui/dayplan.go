@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ngavilan-dogfy/woffux/internal/agent"
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -76,6 +76,9 @@ type dayPlan struct {
 
 	next    *plannedSign // next scheduled sign, nil when none left
 	nextDue bool         // next sign's time already passed
+
+	moments []time.Time // natural moment of each scheduled sign
+	nextAt  time.Time   // natural moment of the next sign (zero if none)
 }
 
 // minuteOf parses "HH:MM" into minutes from midnight.
@@ -330,19 +333,17 @@ func (p dayPlan) progress() float64 {
 	return f
 }
 
-// expectedAgentRun is when the local agent will actually fire for a sign
-// scheduled at minute: its first run minute at or after that time.
-func expectedAgentRun(minute int) int {
-	hour, m := minute/60, minute%60
-	for _, am := range agent.Minutes {
-		if am >= m {
-			return hour*60 + am
-		}
+// attachMoments fills in the natural moment of every scheduled sign (see
+// internal/timing), so the screen shows when a sign will really happen.
+func (p *dayPlan) attachMoments(tm timing.Settings) {
+	events := make([]timing.Event, len(p.schedule))
+	for i, e := range p.schedule {
+		events[i] = timing.Event{Minute: e.minute, In: e.in}
 	}
-	if len(agent.Minutes) == 0 {
-		return minute
+	p.moments = tm.Targets(p.now, events)
+	if p.next != nil && p.signCount < len(p.moments) {
+		p.nextAt = p.moments[p.signCount]
 	}
-	return (hour+1)*60 + agent.Minutes[0]
 }
 
 // ── Week ──

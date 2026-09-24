@@ -1,6 +1,7 @@
 package github
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -340,5 +341,27 @@ func TestGenerateCatchUpCrons(t *testing.T) {
 	}
 	if !sawCET || !sawCEST {
 		t.Fatalf("expected both DST offsets, got %#v", crons)
+	}
+}
+
+func TestWorkflowBakesSeasons(t *testing.T) {
+	regular, _ := config.ParseScheduleText("mon-thu 8:30-13:30 14:15-17:30, fri 8-15")
+	summer, _ := config.ParseScheduleText("mon-fri 8-15")
+	cfg := &config.Config{
+		Schedule:       summer, // today happens to be in summer
+		Timezone:       "Europe/Madrid",
+		SavedSchedules: map[string]config.Schedule{"regular": regular, "summer": summer},
+		Seasons:        config.Seasons{Default: "regular", Periods: []config.Season{{Preset: "summer", From: "07-01", To: "08-31"}}},
+	}
+	y := GenerateWorkflowYAMLForConfig(cfg)
+	if !strings.Contains(y, "--catch-up '"+CatchUpSpec(regular)+"'") {
+		t.Fatal("base spec must be the regular (default) schedule, not today's")
+	}
+	if !strings.Contains(y, "--season '07-01..08-31="+CatchUpSpec(summer)+"'") {
+		t.Fatalf("summer season missing:\n%s", y)
+	}
+	// 13:30 exists only in the regular week, Monday 15:00 only in summer.
+	if !strings.Contains(y, "13:30 (UTC") || !regexp.MustCompile(`Mon[^\n]*15:00 \(UTC`).MatchString(y) {
+		t.Errorf("crons should cover both schedules:\n%s", y)
 	}
 }

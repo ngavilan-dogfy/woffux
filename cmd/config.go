@@ -80,7 +80,7 @@ var configEditCmd = &cobra.Command{
 		}
 
 		var field string
-		err = huh.NewForm(
+		err = newForm(
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title("What do you want to change?").
@@ -108,7 +108,7 @@ var configEditCmd = &cobra.Command{
 		switch field {
 		case "email":
 			oldEmail := cfg.WoffuEmail
-			err = huh.NewForm(
+			err = newForm(
 				huh.NewGroup(
 					huh.NewInput().
 						Title("Email").
@@ -135,7 +135,7 @@ var configEditCmd = &cobra.Command{
 
 		case "password":
 			var pw string
-			err = huh.NewForm(
+			err = newForm(
 				huh.NewGroup(
 					huh.NewInput().Title("New password").EchoMode(huh.EchoModePassword).Value(&pw),
 				),
@@ -214,7 +214,7 @@ var configEditCmd = &cobra.Command{
 			fmt.Println()
 
 			var sync bool
-			if err := huh.NewForm(
+			if err := newForm(
 				huh.NewGroup(
 					huh.NewConfirm().
 						Title("Push changes to GitHub now?").

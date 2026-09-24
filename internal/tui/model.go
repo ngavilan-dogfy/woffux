@@ -489,7 +489,9 @@ func (d *Dashboard) todayCalendarDay() *woffu.CalendarDay {
 }
 
 func (d *Dashboard) plan() dayPlan {
-	return buildDayPlan(d.clock(), d.signInfo, d.todayCalendarDay(), d.cfg.Schedule, d.slots)
+	p := buildDayPlan(d.clock(), d.signInfo, d.todayCalendarDay(), d.cfg.Schedule, d.slots)
+	p.attachMoments(d.cfg.Timing)
+	return p
 }
 
 func (d *Dashboard) needsAutoSync() bool {

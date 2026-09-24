@@ -74,7 +74,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		var confirm bool
-		if err := huh.NewForm(
+		if err := newForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Update to %s?", latestTag)).

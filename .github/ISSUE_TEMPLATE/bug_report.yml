@@ -1,0 +1,41 @@
+name: Bug report
+description: Something signed wrong, didn't sign, or looks broken
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! Please **don't paste passwords, tokens or your exact home coordinates**.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: And what did you expect instead?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Automatic signing (this Mac)
+        - Automatic signing (GitHub Actions)
+        - Dashboard (TUI)
+        - Setup / schedule / timing
+        - Requests (telework, vacation…)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: woffux version
+      description: Output of `woffux --version`
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: e.g. `woffux agent status`, `woffux schedule`, `woffux timing`, or the failing command's output
+      render: text

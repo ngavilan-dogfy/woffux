@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"testing"
 	"time"
 
@@ -200,5 +201,89 @@ func TestResolveCatchUpSignActionRespectsWindow(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected missed IN outside catch-up window to be skipped")
+	}
+}
+
+// ── Natural timing ──
+
+const tueSpec = "2:08:30:in;2:13:30:out;2:14:15:in;2:17:30:out"
+
+var natural = timing.Settings{InEarly: 6, InLate: 1, OutLate: 8, Seed: "test-seed"}
+
+func tueAt(h, m int) time.Time { return time.Date(2026, time.May, 19, h, m, 0, 0, time.Local) }
+
+func TestPlanCatchUpWaitsForNaturalMoment(t *testing.T) {
+	plan, err := planCatchUp(tueSpec, nil, tueAt(8, 16), 2*time.Hour, natural, 20*time.Minute, 0)
+	if err != nil || !plan.ok {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	if plan.action != woffu.SignActionIn || plan.label != "08:30" {
+		t.Fatalf("plan = %+v, want 08:30 in", plan)
+	}
+	if !plan.at.After(tueAt(8, 16)) || plan.at.Before(tueAt(8, 24)) || plan.at.After(tueAt(8, 31)) {
+		t.Fatalf("moment %s outside 08:24–08:31", plan.at.Format("15:04:05"))
+	}
+	// Every signer computes the same moment.
+	again, _ := planCatchUp(tueSpec, nil, tueAt(8, 1), 2*time.Hour, natural, 40*time.Minute, 0)
+	if !again.at.Equal(plan.at) {
+		t.Fatalf("moment changed between runs: %s vs %s", again.at, plan.at)
+	}
+}
+
+func TestPlanCatchUpNothingWhenTooFarAhead(t *testing.T) {
+	plan, _ := planCatchUp(tueSpec, nil, tueAt(7, 0), 2*time.Hour, natural, 20*time.Minute, 0)
+	if plan.ok {
+		t.Fatalf("08:30 is 90 min away, nothing to do: %+v", plan)
+	}
+	due, _ := anyCatchUpEventDue(tueSpec, tueAt(7, 0), 2*time.Hour, natural, 20*time.Minute)
+	if due {
+		t.Fatal("pre-auth check must skip without touching the network")
+	}
+	due, _ = anyCatchUpEventDue(tueSpec, tueAt(8, 16), 2*time.Hour, natural, 20*time.Minute)
+	if !due {
+		t.Fatal("pre-auth check must see the upcoming moment")
+	}
+}
+
+// An IN signed early by the agent must satisfy the event for the GitHub
+// fallback that runs later (no double sign).
+func TestPlanCatchUpEarlySignSatisfiesEvent(t *testing.T) {
+	slots := []woffu.SignSlot{{In: "2026-05-19T08:24:10", Out: "2026-05-19T13:33:00"}}
+	plan, _ := planCatchUp(tueSpec, slots, tueAt(13, 40), 2*time.Hour, natural, 20*time.Minute, 3*time.Minute)
+	if plan.ok && plan.label != "14:15" {
+		t.Fatalf("already signed events must not be planned again: %+v", plan)
+	}
+}
+
+func TestPlanCatchUpGitHubGraceGoesAfterAgent(t *testing.T) {
+	agentPlan, _ := planCatchUp(tueSpec, nil, tueAt(8, 16), 2*time.Hour, natural, 20*time.Minute, 0)
+	ghPlan, _ := planCatchUp(tueSpec, nil, tueAt(8, 16), 2*time.Hour, natural, 20*time.Minute, 3*time.Minute)
+	if ghPlan.at.Sub(agentPlan.at) != 3*time.Minute {
+		t.Fatalf("GitHub should sign 3 min after the agent: %s vs %s", ghPlan.at, agentPlan.at)
+	}
+}
+
+func TestPlanCatchUpExactTimingSignsOnTheMinute(t *testing.T) {
+	plan, _ := planCatchUp(tueSpec, nil, tueAt(8, 16), 2*time.Hour, timing.Settings{}, 20*time.Minute, 0)
+	if !plan.ok || plan.at.Format("15:04:05") != "08:30:00" {
+		t.Fatalf("exact timing should wait for 08:30:00, got %+v", plan)
+	}
+}
+
+func TestSeasonalSpecFollowsDates(t *testing.T) {
+	seasons := []string{"07-01..08-31=1:08:00:in;1:15:00:out", "12-24..01-06=1:09:00:in;1:14:00:out"}
+	day := func(s string) time.Time { d, _ := time.Parse("2006-01-02", s); return d }
+	cases := map[string]string{
+		"2026-06-30": "base",
+		"2026-07-01": "1:08:00:in;1:15:00:out",
+		"2026-08-31": "1:08:00:in;1:15:00:out",
+		"2026-09-01": "base",
+		"2026-12-28": "1:09:00:in;1:14:00:out",
+		"2027-01-06": "1:09:00:in;1:14:00:out",
+	}
+	for d, want := range cases {
+		if got := seasonalSpec("base", seasons, day(d)); got != want {
+			t.Errorf("%s -> %s, want %s", d, got, want)
+		}
 	}
 }

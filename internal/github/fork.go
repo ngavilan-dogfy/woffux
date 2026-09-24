@@ -106,6 +106,9 @@ func setSecrets(repo, token string, cfg *config.Config, password string) error {
 		"WOFFU_LONGITUDE":      fmt.Sprintf("%f", cfg.Longitude),
 		"WOFFU_HOME_LATITUDE":  fmt.Sprintf("%f", cfg.HomeLatitude),
 		"WOFFU_HOME_LONGITUDE": fmt.Sprintf("%f", cfg.HomeLongitude),
+		// Same natural-timing windows and seed as this machine, so the
+		// fallback signs at the very same moments ("off" = exact).
+		"WOFFUX_TIMING": orOff(cfg.Timing.Encode()),
 	}
 
 	// Add Telegram secrets if configured
@@ -131,7 +134,7 @@ func pushWorkflowsViaAPI(repo string, cfg *config.Config) error {
 	}
 
 	workflows := map[string]string{
-		".github/workflows/sign.yml":        GenerateWorkflowYAML(cfg.Schedule, cfg.Timezone, cfg.GetRandomDelaySecs()),
+		".github/workflows/sign.yml":        GenerateWorkflowYAMLForConfig(cfg),
 		".github/workflows/sign-manual.yml": GenerateManualWorkflowYAML(),
 		".github/workflows/keepalive.yml":   GenerateKeepaliveWorkflowYAML(),
 	}
@@ -222,7 +225,7 @@ func pushWorkflows(repo string, cfg *config.Config) error {
 	}
 
 	// Generate and write auto-sign workflow
-	autoYAML := GenerateWorkflowYAML(cfg.Schedule, cfg.Timezone, cfg.GetRandomDelaySecs())
+	autoYAML := GenerateWorkflowYAMLForConfig(cfg)
 	if err := os.WriteFile(filepath.Join(workflowDir, "sign.yml"), []byte(autoYAML), 0644); err != nil {
 		return err
 	}
@@ -281,7 +284,7 @@ func CheckWorkflowSync(repo string, cfg *config.Config) (bool, error) {
 		return false, fmt.Errorf("decode remote workflow: %w", err)
 	}
 
-	expected := GenerateWorkflowYAML(cfg.Schedule, cfg.Timezone, cfg.GetRandomDelaySecs())
+	expected := GenerateWorkflowYAMLForConfig(cfg)
 	return strings.TrimSpace(string(remoteContent)) == strings.TrimSpace(expected), nil
 }
 
@@ -384,4 +387,11 @@ func cmdOutput(dir string, name string, args ...string) (string, error) {
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return string(out), err
+}
+
+func orOff(v string) string {
+	if v == "" {
+		return "off"
+	}
+	return v
 }

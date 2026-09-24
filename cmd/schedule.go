@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
@@ -28,13 +30,7 @@ var scheduleCmd = &cobra.Command{
 			return printJSON(scheduleToJSON(cfg))
 		}
 
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-
-		fmt.Printf("Timezone: %s\n\n", cfg.Timezone)
-		fmt.Printf("  %s = clock in    %s = clock out\n\n", sIn.Render("▶ IN"), sOut.Render("■ OUT"))
-		printScheduleVisual(cfg.Schedule, sIn, sOut)
-		fmt.Println()
+		printScheduleOverview(cfg)
 		return nil
 	},
 }
@@ -48,7 +44,7 @@ var scheduleEditCmd = &cobra.Command{
 			return err
 		}
 
-		scheduleResult, err := scheduleWizard()
+		scheduleResult, err := scheduleWizard(true)
 		if err != nil {
 			return err
 		}
@@ -69,7 +65,7 @@ var scheduleEditCmd = &cobra.Command{
 		// Offer to sync workflows when GitHub is configured.
 		if cfg.GithubFork != "" {
 			var push bool
-			if err := huh.NewForm(
+			if err := newForm(
 				huh.NewGroup(
 					huh.NewConfirm().
 						Title(fmt.Sprintf("Push to %s?", cfg.GithubFork)).
@@ -277,7 +273,72 @@ var scheduleDeleteCmd = &cobra.Command{
 	},
 }
 
+var scheduleSetCmd = &cobra.Command{
+	Use:   "set <week>",
+	Short: `Set the schedule from text, e.g. "L-J 8:30-13:30 14:15-17:30, V 8-15"`,
+	Long: `Set the schedule in one line.
+
+Days: mon tue wed thu fri (or lunes…, L M X J V), ranges (mon-thu, L-J),
+lists (L+X+V) or "weekdays". Blocks: 9-14, 8:30-13:30, 0830-1330, 15h-18h.
+Separate groups with commas. Days you don't mention are days off.
+
+Examples:
+  woffux schedule set "mon-thu 8:30-13:30 14:15-17:30, fri 8-15"
+  woffux schedule set "L-V 9-14 15-18"
+  woffux schedule set "weekdays 8-15"`,
+	Args:         cobra.MinimumNArgs(1),
+	SilenceUsage: true,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cfg, err := config.Load()
+		if err != nil {
+			return err
+		}
+		s, err := config.ParseScheduleText(strings.Join(args, " "))
+		if err != nil {
+			return err
+		}
+		cfg.Schedule = s
+		cfg.Normalize()
+		if err := config.Save(cfg); err != nil {
+			return fmt.Errorf("save config: %w", err)
+		}
+		fmt.Printf("  %s Schedule saved: %s\n", stIn.Render("✓"), weekOneLine(s))
+		printWeek(s)
+		if cfg.GithubFork != "" {
+			fmt.Printf("  Run %s so the GitHub backup uses it too.\n\n", stBold.Render("woffux schedule push"))
+		}
+		return nil
+	},
+}
+
+// printScheduleOverview shows the week, timing, seasons and presets.
+func printScheduleOverview(cfg *config.Config) {
+	title := "Your week"
+	if cfg.ActiveSchedule != "" {
+		title += stFaint.Render(" · preset ") + stBrand.Render(cfg.ActiveSchedule)
+	}
+	fmt.Println()
+	fmt.Println("  " + stBold.Render(title))
+	printWeek(cfg.Schedule)
+	if cfg.Timing.Active() {
+		fmt.Printf("  %s %s\n", stFaint.Render("Timing   "), stText.Render("natural · "+cfg.Timing.Describe()))
+	} else {
+		fmt.Printf("  %s %s\n", stFaint.Render("Timing   "), stText.Render("exact minute")+stFaint.Render("  (woffux timing natural)"))
+	}
+	for _, p := range cfg.Seasons.Periods {
+		fmt.Printf("  %s %s\n", stFaint.Render("Seasonal "), stText.Render(fmt.Sprintf("%s from %s to %s, otherwise %s", p.Preset, dayMonth(p.From), dayMonth(p.To), orDefaultStr(cfg.Seasons.Default, "current"))))
+	}
+	if when, preset, ok := cfg.NextSeasonChange(time.Now()); ok {
+		fmt.Printf("  %s %s\n", stFaint.Render("Next     "), stText.Render(fmt.Sprintf("switches to %s on %s", preset, when.Format("Mon 2 Jan 2006"))))
+	}
+	if names := cfg.SchedulePresetNames(); len(names) > 0 {
+		fmt.Printf("  %s %s\n", stFaint.Render("Presets  "), stText.Render(strings.Join(names, ", ")))
+	}
+	fmt.Printf("\n  %s\n\n", stFaint.Render("Change it: woffux schedule edit · woffux schedule set \"L-V 9-14 15-18\""))
+}
+
 func init() {
+	scheduleCmd.AddCommand(scheduleSetCmd)
 	scheduleCmd.Flags().BoolVar(&scheduleJSONFlag, "json", false, "Output as JSON")
 	scheduleCmd.AddCommand(scheduleEditCmd)
 	scheduleCmd.AddCommand(schedulePushCmd)

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -60,6 +61,19 @@ func (d *Dashboard) getActions() []action {
 			title, hint = "Fix GitHub sync", "schedule on GitHub is outdated"
 		}
 		add(action{key: "sync", section: "Autopilot", title: title, hint: hint})
+	}
+
+	// Natural timing
+	curTiming := d.cfg.Timing.PresetKey()
+	if !d.cfg.Timing.Active() {
+		curTiming = "exact"
+	}
+	for _, p := range timing.Presets {
+		a := action{key: "timing:" + p.Key, section: "Natural timing", title: p.Name, hint: p.Description}
+		if p.Key == curTiming {
+			a.current, a.hint = true, "in use · "+p.Description
+		}
+		add(a)
 	}
 
 	// Schedule
@@ -120,7 +134,7 @@ func (d *Dashboard) filteredActions() []action {
 
 func (d *Dashboard) runAction(key string) tea.Cmd {
 	switch key {
-	case "toggle-agent", "toggle-github", "sync":
+	case "toggle-agent", "toggle-github", "sync", "timing:natural", "timing:relaxed", "timing:exact":
 		if cmd, busy := d.guardBusy(); busy {
 			return cmd
 		}
@@ -174,6 +188,9 @@ func (d *Dashboard) runAction(key string) tea.Cmd {
 	case "quit":
 		return tea.Quit
 	default:
+		if k, ok := strings.CutPrefix(key, "timing:"); ok {
+			return d.applyTiming(k)
+		}
 		if name, ok := strings.CutPrefix(key, "preset:"); ok {
 			if name == d.cfg.ActiveSchedule {
 				return nil

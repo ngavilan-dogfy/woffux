@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -126,13 +127,16 @@ func TestDayPlanNeverNegative(t *testing.T) {
 	_ = progressBar(0.5, 0, cOK)
 }
 
-func TestExpectedAgentRun(t *testing.T) {
-	cases := map[string]string{"08:30": "08:31", "08:31": "08:31", "13:30": "13:31", "08:47": "09:01", "08:00": "08:01"}
-	for in, want := range cases {
-		m, _ := minuteOf(in)
-		if got := clockOf(expectedAgentRun(m)); got != want {
-			t.Errorf("expectedAgentRun(%s) = %s, want %s", in, got, want)
-		}
+func TestNextMomentUsesNaturalTiming(t *testing.T) {
+	d := previewDashboard("07:52", nil)
+	d.cfg.Timing = timing.Settings{}
+	if p := d.plan(); p.nextAt.Format("15:04:05") != "08:30:00" {
+		t.Fatalf("exact timing next moment = %s", p.nextAt.Format("15:04:05"))
+	}
+	d.cfg.Timing = timing.Settings{InEarly: 6, InLate: 1, OutLate: 8, Seed: "tui"}
+	p := d.plan()
+	if p.nextAt.Before(at("08:24")) || p.nextAt.After(at("08:31")) {
+		t.Fatalf("natural next moment %s outside the IN window", p.nextAt.Format("15:04:05"))
 	}
 }
 
