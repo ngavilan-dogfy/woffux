@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
@@ -86,37 +85,7 @@ Examples:
 			return nil
 		}
 
-		// TTY
-		if len(signs) == 0 {
-			fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-				fmt.Sprintf("  No signs found from %s to %s", from.Format("2006-01-02"), to.Format("2006-01-02"))))
-			return nil
-		}
-
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-		sDate := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Width(12)
-		sTime := lipgloss.NewStyle().Bold(true).Width(8)
-
-		fmt.Printf("\n  Sign history (%s to %s)\n\n", from.Format("2006-01-02"), to.Format("2006-01-02"))
-
-		lastDate := ""
-		for _, s := range signs {
-			dateCol := ""
-			if s.Date != lastDate {
-				dateCol = s.Date
-				lastDate = s.Date
-			}
-
-			typeLabel := sIn.Render("IN ")
-			if s.Type == "out" {
-				typeLabel = sOut.Render("OUT")
-			}
-
-			fmt.Printf("  %s %s %s\n", sDate.Render(dateCol), sTime.Render(s.Time), typeLabel)
-		}
-		fmt.Println()
-
+		viewHistory(signs, from, to)
 		return nil
 	},
 }

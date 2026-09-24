@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
@@ -79,42 +78,7 @@ Examples:
 			return nil
 		}
 
-		// TTY
-		if len(requests) == 0 {
-			fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("  No requests found."))
-			return nil
-		}
-
-		sId := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Width(10)
-		sType := lipgloss.NewStyle().Width(25)
-		sDate := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Width(24)
-
-		fmt.Println()
-		for _, r := range requests {
-			statusStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f59e0b")) // pending=amber
-			switch r.Status {
-			case "approved":
-				statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-			case "rejected":
-				statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-			case "cancelled":
-				statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-			}
-
-			dateRange := r.StartDate
-			if r.StartDate != r.EndDate {
-				dateRange = r.StartDate + " → " + r.EndDate
-			}
-
-			fmt.Printf("  %s %s %s %s\n",
-				sId.Render(fmt.Sprintf("#%d", r.RequestID)),
-				sType.Render(r.EventName),
-				sDate.Render(dateRange),
-				statusStyle.Render(r.Status),
-			)
-		}
-		fmt.Println()
-
+		viewRequests(requests)
 		return nil
 	},
 }

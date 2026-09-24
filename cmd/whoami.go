@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
@@ -44,18 +43,7 @@ var whoamiCmd = &cobra.Command{
 			})
 		}
 
-		sLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(14)
-		sVal := lipgloss.NewStyle().Bold(true)
-
-		fmt.Println()
-		fmt.Println("  " + sLabel.Render("Name") + sVal.Render(profile.FullName))
-		fmt.Println("  " + sLabel.Render("Email") + sVal.Render(profile.Email))
-		fmt.Println("  " + sLabel.Render("Company") + sVal.Render(profile.CompanyName))
-		fmt.Println("  " + sLabel.Render("Department") + sVal.Render(profile.DepartmentName))
-		fmt.Println("  " + sLabel.Render("Job title") + sVal.Render(profile.JobTitle))
-		fmt.Println("  " + sLabel.Render("Office") + sVal.Render(profile.OfficeName))
-		fmt.Println()
-
+		viewWhoami(profile)
 		return nil
 	},
 }

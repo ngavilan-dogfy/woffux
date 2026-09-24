@@ -3,6 +3,8 @@ package cmd
 import (
 	"bufio"
 	"fmt"
+	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/huh/spinner"
 	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"os"
 	"sort"
@@ -26,6 +28,7 @@ var signCatchUpTimezone string
 var signCatchUpWindow time.Duration
 var signNoVerify bool
 var signLookahead time.Duration
+var signYes bool
 var signSeasons []string
 
 // seasonalSpec picks today's catch-up spec from --season values
@@ -153,20 +156,28 @@ In CI, reads credentials from environment variables.`,
 		client := woffu.NewWoffuClient(cfg.WoffuURL)
 		companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
 
+		var (
+			token string
+			info  *woffu.SignInfo
+		)
+		load := func() {
+			token, err = woffu.AuthenticateCached(client, companyClient, cfg.WoffuEmail, password)
+			if err != nil {
+				err = fmt.Errorf("auth failed: %w", err)
+				return
+			}
+			info, err = woffu.GetSignInfo(companyClient, token, cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)
+			if err != nil {
+				err = fmt.Errorf("get sign info: %w", err)
+			}
+		}
 		if isTTY() {
-			fmt.Println("Authenticating...")
+			spinner.New().Title("Checking Woffu…").Action(load).Run()
+		} else {
+			load()
 		}
-		token, err := woffu.AuthenticateCached(client, companyClient, cfg.WoffuEmail, password)
 		if err != nil {
-			return fmt.Errorf("auth failed: %w", err)
-		}
-
-		if isTTY() {
-			fmt.Println("Checking calendar...")
-		}
-		info, err := woffu.GetSignInfo(companyClient, token, cfg.Latitude, cfg.Longitude, cfg.HomeLatitude, cfg.HomeLongitude)
-		if err != nil {
-			return fmt.Errorf("get sign info: %w", err)
+			return err
 		}
 
 		telegramCfg := notify.TelegramConfig{
@@ -262,9 +273,23 @@ In CI, reads credentials from environment variables.`,
 			}
 		}
 
-		if isTTY() {
-			fmt.Printf("%s %s — signing with coordinates (%.4f, %.4f)\n",
-				info.Mode.Emoji(), info.Mode.Label(), info.Latitude, info.Longitude)
+		// A person at a terminal confirms; scripts, the agent and CI don't.
+		interactive := isTTY() && strings.TrimSpace(signCatchUpSpec) == "" && expectedAction == ""
+		if interactive && !signYes {
+			dir := "IN"
+			if s, err := woffu.GetTodaySlots(companyClient, token); err == nil && woffu.IsSignedIn(s) {
+				dir = "OUT"
+			}
+			ok := true
+			if err := newForm(huh.NewGroup(huh.NewConfirm().
+				Title(fmt.Sprintf("Clock %s now?", dir)).
+				Description(fmt.Sprintf("%s · %s location", time.Now().Format("15:04"), strings.TrimSpace(stripANSIcmd(uiMode(info.Mode))))).
+				Affirmative("Sign").Negative("Cancel").Value(&ok))).Run(); err != nil || !ok {
+				if err == nil {
+					uiWarn("Cancelled — nothing was signed.")
+				}
+				return err
+			}
 		}
 
 		// Snapshot state before signing so the result can be verified.
@@ -294,11 +319,13 @@ In CI, reads credentials from environment variables.`,
 		}
 
 		if isTTY() {
-			if verify {
-				fmt.Println("Signed and verified!")
-			} else {
-				fmt.Println("Signed successfully!")
+			note := "verified in Woffu"
+			if !verify {
+				note = "not verified"
 			}
+			fmt.Println()
+			uiOK("Signed at %s · %s", time.Now().Format("15:04"), note)
+			fmt.Println()
 		} else {
 			fmt.Printf("OK %s %s %s\n", info.Date, info.Mode, info.Mode.Label())
 		}
@@ -349,6 +376,7 @@ func anyCatchUpEventDue(spec string, now time.Time, window time.Duration, tm tim
 
 func init() {
 	signCmd.Flags().BoolVar(&signForce, "force", false, "Sign even if not a working day")
+	signCmd.Flags().BoolVarP(&signYes, "yes", "y", false, "Don't ask for confirmation in a terminal")
 	signCmd.Flags().StringVar(&signExpected, "expected", "", "Expected sign action: 'in' or 'out'. Skips if already in that state.")
 	signCmd.Flags().StringVar(&signCatchUpSpec, "catch-up", "", "Scheduled catch-up spec: day:HH:MM:action entries separated by semicolons.")
 	signCmd.Flags().StringVar(&signCatchUpTimezone, "catch-up-timezone", "", "Timezone used to resolve catch-up schedules.")

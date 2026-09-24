@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
@@ -60,16 +59,7 @@ Examples:
 			return nil
 		}
 
-		// TTY
-		sDate := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280")).Width(14)
-		sName := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-
-		fmt.Printf("\n  Company holidays (%d)\n\n", len(holidays))
-		for _, h := range holidays {
-			fmt.Printf("  %s %s\n", sDate.Render(h.Date), sName.Render(h.Name))
-		}
-		fmt.Println()
-
+		viewHolidays(holidays)
 		return nil
 	},
 }

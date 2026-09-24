@@ -54,25 +54,7 @@ var statusCmd = &cobra.Command{
 			return nil
 		}
 
-		// TTY: styled human-friendly output
-		fmt.Printf("Date:        %s\n", info.Date)
-		fmt.Printf("Working day: %s\n", boolToYesNo(info.IsWorkingDay))
-		fmt.Printf("Mode:        %s %s\n", info.Mode.Emoji(), info.Mode.Label())
-		if info.IsWorkingDay {
-			fmt.Printf("Coordinates: %.4f, %.4f\n", info.Latitude, info.Longitude)
-		}
-
-		if len(info.NextEvents) > 0 {
-			fmt.Println("\nNext events:")
-			for _, e := range info.NextEvents {
-				names := ""
-				if len(e.Names) > 0 {
-					names = " — " + e.Names[0]
-				}
-				fmt.Printf("  %s%s\n", e.Date, names)
-			}
-		}
-
+		viewStatus(info)
 		return nil
 	},
 }
