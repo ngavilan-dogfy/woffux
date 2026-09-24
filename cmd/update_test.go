@@ -122,3 +122,23 @@ func TestShouldAvoidSelfReplace(t *testing.T) {
 		t.Fatal("expected installed woffux executable to be replaceable")
 	}
 }
+
+func TestFetchLatestReleaseFromWeb(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://github.com/ngavilan-dogfy/woffux/releases/tag/v5.10.0")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer srv.Close()
+
+	release, err := fetchLatestReleaseFromWeb(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v5.10.0" {
+		t.Fatalf("tag = %q", release.TagName)
+	}
+	url, err := release.DownloadURL("woffux-darwin-arm64")
+	if err != nil || url != "https://github.com/ngavilan-dogfy/woffux/releases/download/v5.10.0/woffux-darwin-arm64" {
+		t.Fatalf("url = %q, err = %v", url, err)
+	}
+}

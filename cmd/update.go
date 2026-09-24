@@ -22,6 +22,7 @@ var Version = "dev"
 
 var (
 	releasesAPI      = "https://api.github.com/repos/ngavilan-dogfy/woffux/releases/latest"
+	releasesWeb      = "https://github.com/ngavilan-dogfy/woffux/releases/latest"
 	updateHTTPClient = &http.Client{Timeout: 20 * time.Second}
 )
 
@@ -55,7 +56,7 @@ var updateCmd = &cobra.Command{
 		spinner.New().
 			Title("Checking for updates...").
 			Action(func() {
-				release, checkErr = fetchLatestRelease(releasesAPI)
+				release, checkErr = fetchLatestReleaseWithFallback()
 			}).
 			Run()
 
@@ -171,11 +172,64 @@ func normalizeVersion(version string) string {
 
 // fetchLatestTag queries the GitHub API directly (no gh CLI needed).
 func fetchLatestTag() (string, error) {
-	release, err := fetchLatestRelease(releasesAPI)
+	release, err := fetchLatestReleaseWithFallback()
 	if err != nil {
 		return "", err
 	}
 	return release.TagName, nil
+}
+
+// fetchLatestReleaseWithFallback asks the API first and, when it fails
+// (anonymous calls are limited to 60/hour per IP, so shared office or VPN
+// IPs hit 403 often), reads the tag from the public releases page instead.
+func fetchLatestReleaseWithFallback() (githubRelease, error) {
+	release, apiErr := fetchLatestRelease(releasesAPI)
+	if apiErr == nil {
+		return release, nil
+	}
+	release, webErr := fetchLatestReleaseFromWeb(releasesWeb)
+	if webErr != nil {
+		return githubRelease{}, fmt.Errorf("%v; fallback: %v", apiErr, webErr)
+	}
+	return release, nil
+}
+
+// fetchLatestReleaseFromWeb resolves the latest tag from the redirect of
+// github.com/<repo>/releases/latest and builds the standard asset URLs.
+func fetchLatestReleaseFromWeb(webURL string) (githubRelease, error) {
+	client := *updateHTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Get(webURL)
+	if err != nil {
+		return githubRelease{}, fmt.Errorf("cannot reach GitHub: %w", err)
+	}
+	defer resp.Body.Close()
+
+	loc := resp.Header.Get("Location")
+	idx := strings.LastIndex(loc, "/tag/")
+	if resp.StatusCode < 300 || resp.StatusCode >= 400 || idx == -1 {
+		return githubRelease{}, fmt.Errorf("releases page returned %d", resp.StatusCode)
+	}
+	tag := strings.TrimSpace(loc[idx+len("/tag/"):])
+	if tag == "" {
+		return githubRelease{}, fmt.Errorf("no releases found")
+	}
+	base := strings.TrimSuffix(loc[:idx], "/releases") + "/releases/download/" + tag + "/"
+	release := githubRelease{TagName: tag}
+	for _, name := range []string{"woffux-darwin-arm64", "woffux-darwin-amd64", "woffux-linux-amd64", "woffux-linux-arm64"} {
+		release.Assets = append(release.Assets, githubReleaseAsset{Name: name, BrowserDownloadURL: base + name})
+	}
+	return release, nil
+}
+
+// githubToken returns a token for authenticated API calls, if one is set.
+func githubToken() string {
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // fetchLatestRelease queries the GitHub API directly (no gh CLI needed).
@@ -185,6 +239,9 @@ func fetchLatestRelease(apiURL string) (githubRelease, error) {
 		return githubRelease{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if tok := githubToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 
 	resp, err := updateHTTPClient.Do(req)
 	if err != nil {
