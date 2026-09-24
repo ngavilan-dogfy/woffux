@@ -61,13 +61,7 @@ var eventsCmd = &cobra.Command{
 			return nil
 		}
 
-		// TTY: styled human-friendly output
-		fmt.Println("Available events:")
-		fmt.Println()
-		for _, e := range events {
-			fmt.Printf("  %-45s %6.0f %s\n", e.Name, e.Available, e.Unit)
-		}
-
+		viewEvents(events)
 		return nil
 	},
 }

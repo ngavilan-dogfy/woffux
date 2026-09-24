@@ -25,13 +25,15 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
+// Legacy message styles, mapped onto the woffux palette (see onboarding.go)
+// so older messages look like the rest of the app.
 var (
-	sOk    = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).SetString("✓")
-	sInfo  = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).SetString("→")
-	sWarn  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).SetString("!")
-	sCoord = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	sDim   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	sBold  = lipgloss.NewStyle().Bold(true)
+	sOk    = lipgloss.NewStyle().Foreground(obIn).SetString("✓")
+	sInfo  = lipgloss.NewStyle().Foreground(obBrand).SetString("→")
+	sWarn  = lipgloss.NewStyle().Foreground(obOut).SetString("!")
+	sCoord = lipgloss.NewStyle().Foreground(obFaint)
+	sDim   = lipgloss.NewStyle().Foreground(obFaint)
+	sBold  = lipgloss.NewStyle().Foreground(obText).Bold(true)
 )
 
 var errNoSelection = fmt.Errorf("no selection")
@@ -546,7 +548,7 @@ func googleMapsURLPicker(title string) (float64, float64, error) {
 
 		lat, lon, err := geocode.ParseGoogleMapsURL(url)
 		if err != nil {
-			fmt.Printf("  %s %s\n\n", lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), err)
+			fmt.Printf("  %s %s\n\n", lipgloss.NewStyle().Foreground(obBad).Render("✗"), err)
 			continue
 		}
 
@@ -612,180 +614,77 @@ func scheduleWizardSavedPresetMessage(result scheduleWizardResult) string {
 	return fmt.Sprintf("  %s Saved preset \"%s\"\n", sOk, result.SavedPreset)
 }
 
-func customScheduleWizard(sIn, sOut lipgloss.Style) (config.Schedule, error) {
-	schedule := config.Schedule{}
+func customScheduleWizard(_, _ lipgloss.Style) (config.Schedule, error) {
+	var schedule config.Schedule
+	names := map[time.Weekday]string{time.Monday: "Monday", time.Tuesday: "Tuesday", time.Wednesday: "Wednesday", time.Thursday: "Thursday", time.Friday: "Friday"}
+	order := []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}
+	done := map[time.Weekday]bool{}
 
-	dayNames := []string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday"}
-	dayPtrs := []*config.DaySchedule{
-		&schedule.Monday, &schedule.Tuesday, &schedule.Wednesday,
-		&schedule.Thursday, &schedule.Friday,
-	}
-
-	// Initialize all as disabled
-	for _, dp := range dayPtrs {
-		dp.Enabled = false
-	}
-
-	remaining := make([]bool, 5)
-	for i := range remaining {
-		remaining[i] = true
-	}
-
-	for {
-		// Show which days still need configuring
-		var pendingDays []string
-		for i, r := range remaining {
-			if r {
-				pendingDays = append(pendingDays, dayNames[i])
+	for len(done) < len(order) {
+		var opts []huh.Option[time.Weekday]
+		for _, d := range order {
+			if !done[d] {
+				opts = append(opts, huh.NewOption(names[d], d).Selected(true))
 			}
 		}
-		if len(pendingDays) == 0 {
+		var picked []time.Weekday
+		if err := newForm(huh.NewGroup(huh.NewMultiSelect[time.Weekday]().
+			Title("Which days share the same hours?").
+			Description("x or space to (un)select · enter to continue · leave empty to finish (the rest are days off)").
+			Options(opts...).Value(&picked))).Run(); err != nil {
+			return schedule, err
+		}
+		if len(picked) == 0 {
 			break
 		}
 
-		// Multi-select days for this group
-		var selectedDays []int
-		options := make([]huh.Option[int], 0)
-		for i, r := range remaining {
-			if r {
-				options = append(options, huh.NewOption(dayNames[i], i))
-			}
+		blocks := "8:30-13:30 14:15-17:30"
+		var labels []string
+		for _, d := range picked {
+			labels = append(labels, names[d][:3])
 		}
-
-		err := newForm(
-			huh.NewGroup(
-				huh.NewMultiSelect[int]().
-					Title("Select days to configure together").
-					Description(fmt.Sprintf("%d days remaining", len(pendingDays))).
-					Options(options...).
-					Value(&selectedDays),
-			),
-		).Run()
+		describe := func() string {
+			s, err := config.ParseScheduleText("mon " + blocks)
+			if err != nil {
+				return "✗ " + strings.TrimPrefix(err.Error(), "\"mon "+blocks+"\": ")
+			}
+			return "✓ " + config.FormatMinutes(s.Monday.DayMinutes()) + " a day · write \"off\" for a day off"
+		}
+		if err := newForm(huh.NewGroup(huh.NewInput().
+			Title("Hours for "+strings.Join(labels, ", ")).
+			Placeholder("8:30-13:30 14:15-17:30").
+			Value(&blocks).
+			DescriptionFunc(describe, &blocks).
+			Validate(func(v string) error { _, err := config.ParseScheduleText("mon " + v); return err }))).Run(); err != nil {
+			return schedule, err
+		}
+		parsed, err := config.ParseScheduleText("mon " + blocks)
 		if err != nil {
-			return config.Schedule{}, err
+			return schedule, err
 		}
-
-		if len(selectedDays) == 0 {
-			// Mark remaining as off
-			for i, r := range remaining {
-				if r {
-					dayPtrs[i].Enabled = false
-					remaining[i] = false
-				}
-			}
-			break
+		for _, d := range picked {
+			schedule = setWeekday(schedule, d, parsed.Monday)
+			done[d] = true
 		}
-
-		// Build label for this group
-		var groupNames []string
-		for _, idx := range selectedDays {
-			groupNames = append(groupNames, dayNames[idx][:3])
-		}
-
-		// Ask for blocks
-		fmt.Printf("\n  %s\n", sBold.Render(strings.Join(groupNames, ", ")))
-		daySchedule, err := editBlocks(sIn, sOut, "08:30", "13:30", "14:15", "17:30")
-		if err != nil {
-			return config.Schedule{}, err
-		}
-
-		// Apply to selected days
-		for _, idx := range selectedDays {
-			*dayPtrs[idx] = daySchedule
-			remaining[idx] = false
-		}
-
-		// Check if any remaining
-		anyLeft := false
-		for _, r := range remaining {
-			if r {
-				anyLeft = true
-				break
-			}
-		}
-		if !anyLeft {
-			break
-		}
-
-		fmt.Println()
+		printWeek(schedule)
 	}
-
 	return schedule, nil
 }
 
-func editBlocks(sIn, sOut lipgloss.Style, defaults ...string) (config.DaySchedule, error) {
-	// First ask how many blocks
-	var numBlocksStr string
-	if err := newForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("How many time blocks?").
-				Options(
-					huh.NewOption(fmt.Sprintf("1 block  (%s → %s)", sIn.Render("IN"), sOut.Render("OUT")), "1"),
-					huh.NewOption(fmt.Sprintf("2 blocks (%s → %s → %s → %s)", sIn.Render("IN"), sOut.Render("OUT"), sIn.Render("IN"), sOut.Render("OUT")), "2"),
-					huh.NewOption("Day off", "off"),
-				).
-				Value(&numBlocksStr),
-		),
-	).Run(); err != nil {
-		return config.DaySchedule{}, err
+func setWeekday(s config.Schedule, d time.Weekday, ds config.DaySchedule) config.Schedule {
+	switch d {
+	case time.Monday:
+		s.Monday = ds
+	case time.Tuesday:
+		s.Tuesday = ds
+	case time.Wednesday:
+		s.Wednesday = ds
+	case time.Thursday:
+		s.Thursday = ds
+	case time.Friday:
+		s.Friday = ds
 	}
-
-	if numBlocksStr == "off" {
-		return config.DaySchedule{Enabled: false}, nil
-	}
-
-	numBlocks := 1
-	if numBlocksStr == "2" {
-		numBlocks = 2
-	}
-
-	times := make([]string, numBlocks*2)
-	// Set defaults
-	for i := range times {
-		if i < len(defaults) {
-			times[i] = defaults[i]
-		}
-	}
-
-	fields := make([]huh.Field, 0, len(times))
-	for i := range times {
-		label := sIn.Render("▶ IN ")
-		if i%2 == 1 {
-			label = sOut.Render("■ OUT")
-		}
-		blockNum := (i / 2) + 1
-		title := fmt.Sprintf("%s  Block %d", label, blockNum)
-
-		idx := i
-		fields = append(fields, huh.NewInput().
-			Title(title).
-			Placeholder("HH:MM").
-			Value(&times[idx]).
-			Validate(func(s string) error {
-				if s == "" {
-					return fmt.Errorf("enter a time like 08:30")
-				}
-				return validateClockTime(s)
-			}))
-	}
-
-	err := newForm(huh.NewGroup(fields...)).Run()
-	if err != nil {
-		return config.DaySchedule{}, err
-	}
-
-	var entries []config.ScheduleEntry
-	for _, t := range times {
-		if t != "" {
-			entries = append(entries, config.ScheduleEntry{Time: t})
-		}
-	}
-	if err := validateScheduleEntries(entries); err != nil {
-		return config.DaySchedule{}, err
-	}
-
-	return config.DaySchedule{Enabled: true, Times: entries}, nil
+	return s
 }
 
 func validateClockTime(value string) error {
@@ -813,33 +712,9 @@ func validateScheduleEntries(entries []config.ScheduleEntry) error {
 	return nil
 }
 
-func printScheduleVisual(s config.Schedule, sIn, sOut lipgloss.Style) {
-	printDayVisual("Mon", s.Monday, sIn, sOut)
-	printDayVisual("Tue", s.Tuesday, sIn, sOut)
-	printDayVisual("Wed", s.Wednesday, sIn, sOut)
-	printDayVisual("Thu", s.Thursday, sIn, sOut)
-	printDayVisual("Fri", s.Friday, sIn, sOut)
-}
-
-func printDayVisual(name string, day config.DaySchedule, sIn, sOut lipgloss.Style) {
-	if !day.Enabled {
-		fmt.Printf("  %s  off\n", name)
-		return
-	}
-	fmt.Printf("  %s  ", name)
-	for i, t := range day.Times {
-		if i%2 == 0 {
-			fmt.Printf("%s %s  ", sIn.Render("▶"), t.Time)
-		} else {
-			fmt.Printf("%s %s  ", sOut.Render("■"), t.Time)
-		}
-	}
-	fmt.Println()
-}
-
 // checkGhInstalled verifies gh CLI is available and authenticated.
 func checkGhInstalled() error {
-	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	sErr := lipgloss.NewStyle().Foreground(obBad).Bold(true)
 
 	// Check if gh is installed
 	_, err := exec.LookPath("gh")
@@ -1048,7 +923,7 @@ func telegramSetup() (config.TelegramConfig, error) {
 		Run()
 
 	if testResult != nil {
-		fmt.Printf("  %s Test failed: %s\n", lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), testResult)
+		fmt.Printf("  %s Test failed: %s\n", lipgloss.NewStyle().Foreground(obBad).Render("✗"), testResult)
 		fmt.Printf("     Check your token and chat ID. You can reconfigure later in ~/.woffux.yaml\n\n")
 	} else {
 		fmt.Printf("  %s Test message sent! Check your Telegram.\n\n", sOk)
@@ -1098,7 +973,7 @@ func openURL(url string) {
 
 // loginFlow handles the full login with retries and error-specific re-prompts.
 func loginFlow(existing *config.Config) (email, password, company, companyURL string, profile *woffu.UserProfile, err error) {
-	sErr := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+	sErr := lipgloss.NewStyle().Foreground(obBad).Bold(true)
 
 	// Pre-fill from existing config
 	if existing != nil {

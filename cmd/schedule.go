@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
@@ -144,131 +143,193 @@ var scheduleListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-
+		uiTitle("Schedule presets", fmt.Sprintf("%d saved", len(cfg.SavedSchedules)))
 		if len(cfg.SavedSchedules) == 0 {
-			fmt.Println("  No saved presets. Use 'woffux schedule save <name>' to save the current schedule.")
+			uiLine(stFaint.Render("None yet. Save the current week with: woffux schedule save <name>"))
+			fmt.Println()
 			return nil
 		}
-
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-		sActive := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
-
 		for _, name := range cfg.SchedulePresetNames() {
-			s := cfg.SavedSchedules[name]
-			label := sBold.Render(name)
-			if name == cfg.ActiveSchedule {
-				label += sActive.Render(" (active)")
-			}
-			fmt.Printf("\n  %s\n", label)
-			printScheduleVisual(s, sIn, sOut)
+			printPresetRow(cfg, name)
 		}
-		fmt.Println()
+		uiHint("woffux schedule load", "woffux schedule save <name>", "woffux schedule delete")
 		return nil
 	},
 }
 
+// printPresetRow renders one preset: name, badges, the week as text, hours.
+func printPresetRow(cfg *config.Config, name string) {
+	s := cfg.SavedSchedules[name]
+	mark, st := stFaint.Render("○"), stText
+	if name == cfg.ActiveSchedule {
+		mark, st = stIn.Render("●"), stBold
+	}
+	badges := ""
+	if name == cfg.ActiveSchedule {
+		badges += stIn.Render("  in use")
+	}
+	for _, p := range cfg.Seasons.Periods {
+		if p.Preset == name {
+			badges += stOut.Render(fmt.Sprintf("  %s → %s", dayMonth(p.From), dayMonth(p.To)))
+		}
+	}
+	if cfg.Seasons.Default == name && len(cfg.Seasons.Periods) > 0 {
+		badges += stFaint.Render("  rest of the year")
+	}
+	uiLine(mark + " " + st.Render(name) + badges)
+	uiLine("  " + stSubtle.Render(config.ScheduleText(s)) + stFaint.Render("  ·  "+config.FormatMinutes(s.WeekMinutes())+"/week"))
+}
+
+// pickPreset asks which preset to act on when no name was given.
+func pickPreset(cfg *config.Config, title string) (string, error) {
+	names := cfg.SchedulePresetNames()
+	if len(names) == 0 {
+		return "", fmt.Errorf("no saved presets yet — save one with: woffux schedule save <name>")
+	}
+	var opts []huh.Option[string]
+	for _, n := range names {
+		s := cfg.SavedSchedules[n]
+		label := fmt.Sprintf("%-14s %s", n, stFaint.Render(config.ScheduleText(s)+" · "+config.FormatMinutes(s.WeekMinutes())))
+		if n == cfg.ActiveSchedule {
+			label += stIn.Render("  in use")
+		}
+		opts = append(opts, huh.NewOption(label, n))
+	}
+	var name string
+	err := newForm(huh.NewGroup(huh.NewSelect[string]().Title(title).Options(opts...).Value(&name))).Run()
+	return name, err
+}
+
 var scheduleSaveCmd = &cobra.Command{
-	Use:   "save <name>",
-	Short: "Save current schedule as a named preset",
-	Args:  cobra.ExactArgs(1),
+	Use:          "save [name]",
+	Short:        "Save the current week as a named preset",
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-
-		name := config.NormalizePresetName(args[0])
+		name := ""
+		if len(args) == 1 {
+			name = args[0]
+		} else if err := newForm(huh.NewGroup(huh.NewInput().
+			Title("Name this schedule").
+			Description(weekOneLine(cfg.Schedule)).
+			Placeholder("e.g. winter, summer, 4-days").
+			Value(&name).
+			Validate(func(s string) error {
+				if config.NormalizePresetName(s) == "" {
+					return fmt.Errorf("give it a name")
+				}
+				return nil
+			}))).Run(); err != nil {
+			return err
+		}
+		name = config.NormalizePresetName(name)
+		if _, exists := cfg.SavedSchedules[name]; exists && len(args) == 0 {
+			overwrite := false
+			if err := newForm(huh.NewGroup(huh.NewConfirm().Title(fmt.Sprintf("Replace the existing %q?", name)).
+				Affirmative("Replace").Negative("Cancel").Value(&overwrite))).Run(); err != nil || !overwrite {
+				return err
+			}
+		}
 		if err := cfg.SaveSchedulePreset(name, cfg.Schedule); err != nil {
 			return err
 		}
 		cfg.ActiveSchedule = name
-
 		if err := config.Save(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
-
-		fmt.Printf("  %s Saved as \"%s\"\n", sOk, name)
+		uiOK("Saved as %q — switch back any time with: woffux schedule load %s", name, name)
+		fmt.Println()
 		return nil
 	},
 }
 
 var scheduleLoadCmd = &cobra.Command{
-	Use:   "load <name>",
-	Short: "Load a saved schedule preset",
-	Args:  cobra.ExactArgs(1),
+	Use:          "load [name]",
+	Short:        "Switch to a saved preset",
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-
-		name := config.NormalizePresetName(args[0])
-		if !cfg.LoadSchedulePreset(name) {
-			return fmt.Errorf("preset \"%s\" not found. Use 'woffux schedule list' to see available presets", name)
+		name := ""
+		if len(args) == 1 {
+			name = config.NormalizePresetName(args[0])
+		} else if name, err = pickPreset(cfg, "Switch to which schedule?"); err != nil {
+			return err
 		}
-
+		if !cfg.LoadSchedulePreset(name) {
+			return fmt.Errorf("no preset called %q — see: woffux schedule list", name)
+		}
 		if err := config.Save(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
-
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-
-		fmt.Printf("  %s Loaded \"%s\"\n\n", sOk, name)
-		printScheduleVisual(cfg.Schedule, sIn, sOut)
-		fmt.Println()
-
-		// Sync workflows if configured
+		uiOK("Now using %q", name)
+		printWeek(cfg.Schedule)
+		if len(cfg.Seasons.Periods) > 0 {
+			uiWarn("Seasonal switching is on: on its next date woffux will switch presets again.")
+		}
 		if cfg.GithubFork != "" {
 			var pushErr error
-			var reloaded bool
-			spinner.New().
-				Title("Pushing workflows...").
-				Action(func() { reloaded, pushErr = gh.SyncWorkflowsAndRefresh(cfg) }).
-				Run()
-
+			spinner.New().Title("Updating the GitHub backup…").
+				Action(func() { _, pushErr = gh.SyncWorkflowsAndRefresh(cfg) }).Run()
 			if pushErr != nil {
-				fmt.Printf("  %s Push failed: %s\n", sWarn, pushErr)
+				uiErr("GitHub update failed: %s — run woffux sync", pushErr)
 			} else {
-				fmt.Printf("  %s Workflows updated!\n", sOk)
-				if reloaded {
-					fmt.Printf("  %s Cron triggers refreshed!\n", sOk)
-				} else {
-					fmt.Printf("  %s Auto-sign disabled, cron reload skipped.\n", sWarn)
-				}
+				uiOK("GitHub backup updated")
 			}
 		}
-
+		fmt.Println()
 		return nil
 	},
 }
 
 var scheduleDeleteCmd = &cobra.Command{
-	Use:   "delete <name>",
-	Short: "Delete a saved schedule preset",
-	Args:  cobra.ExactArgs(1),
+	Use:          "delete [name]",
+	Short:        "Delete a saved preset",
+	Args:         cobra.MaximumNArgs(1),
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-
-		name := config.NormalizePresetName(args[0])
-		if _, ok := cfg.SavedSchedules[name]; !ok {
-			return fmt.Errorf("preset \"%s\" not found", name)
+		name := ""
+		if len(args) == 1 {
+			name = config.NormalizePresetName(args[0])
+		} else if name, err = pickPreset(cfg, "Delete which preset?"); err != nil {
+			return err
 		}
-
+		if _, ok := cfg.SavedSchedules[name]; !ok {
+			return fmt.Errorf("no preset called %q — see: woffux schedule list", name)
+		}
+		for _, p := range cfg.Seasons.Periods {
+			if p.Preset == name || cfg.Seasons.Default == name {
+				return fmt.Errorf("%q is used by your seasonal schedule — change it first with: woffux schedule edit", name)
+			}
+		}
+		if len(args) == 0 {
+			ok := false
+			if err := newForm(huh.NewGroup(huh.NewConfirm().Title(fmt.Sprintf("Delete %q?", name)).
+				Description(config.ScheduleText(cfg.SavedSchedules[name])).
+				Affirmative("Delete").Negative("Keep it").Value(&ok))).Run(); err != nil || !ok {
+				return err
+			}
+		}
 		delete(cfg.SavedSchedules, name)
 		if cfg.ActiveSchedule == name {
 			cfg.ActiveSchedule = ""
 		}
-
 		if err := config.Save(cfg); err != nil {
 			return fmt.Errorf("save config: %w", err)
 		}
-
-		fmt.Printf("  %s Deleted \"%s\"\n", sOk, name)
+		uiOK("Deleted %q (your current week didn't change)", name)
+		fmt.Println()
 		return nil
 	},
 }

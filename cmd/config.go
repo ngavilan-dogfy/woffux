@@ -2,265 +2,273 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	"github.com/ngavilan-dogfy/woffux/internal/agent"
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	gh "github.com/ngavilan-dogfy/woffux/internal/github"
 )
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "View or edit individual settings",
+	Short: "See all your settings in one place",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-
-		sLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(20)
-		sVal := lipgloss.NewStyle().Bold(true)
-		sMask := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-
-		fmt.Println()
-		fmt.Println(sLabel.Render("Email") + sVal.Render(cfg.WoffuEmail))
-		fmt.Println(sLabel.Render("Password") + sMask.Render("••••••••"))
-		fmt.Println(sLabel.Render("Company") + sVal.Render(cfg.WoffuCompanyURL))
-		fmt.Println(sLabel.Render("Office") + sVal.Render(fmt.Sprintf("%.6f, %.6f", cfg.Latitude, cfg.Longitude)))
-		fmt.Println(sLabel.Render("Home") + sVal.Render(fmt.Sprintf("%.6f, %.6f", cfg.HomeLatitude, cfg.HomeLongitude)))
-		fmt.Println(sLabel.Render("Timezone") + sVal.Render(cfg.Timezone))
-		fmt.Println(sLabel.Render("GitHub fork") + sVal.Render(cfg.GithubFork))
-
-		tg := "not configured"
-		if cfg.Telegram.BotToken != "" {
-			tg = "enabled"
-		}
-		fmt.Println(sLabel.Render("Telegram") + sVal.Render(tg))
-
-		// Auto-sign status
-		autoStatus := sMask.Render("not set up")
-		if cfg.GithubFork != "" {
-			enabled, err := gh.IsAutoSignEnabled(cfg.GithubFork)
-			if err == nil {
-				if enabled {
-					autoStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true).Render("active")
-				} else {
-					autoStatus = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("disabled")
-				}
-			}
-		}
-		fmt.Println(sLabel.Render("Auto-sign") + autoStatus)
-
-		fmt.Println()
-		fmt.Println(sLabel.Render("Schedule"))
-		printScheduleVisual(cfg.Schedule, sIn, sOut)
-
-		fmt.Println()
-		fmt.Printf("  Edit: %s    Auto-sign: %s / %s\n\n",
-			lipgloss.NewStyle().Bold(true).Render("woffux config edit"),
-			lipgloss.NewStyle().Bold(true).Render("woffux auto on"),
-			lipgloss.NewStyle().Bold(true).Render("off"))
-
+		viewConfig(cfg)
 		return nil
 	},
 }
 
+// viewConfig shows every setting, grouped the way people think about them.
+func viewConfig(cfg *config.Config) {
+	uiTitle("Settings", "~/.woffux.yaml")
+
+	uiSection("Account")
+	uiRow("Email", stText.Render(cfg.WoffuEmail))
+	uiRow("Company", stText.Render(strings.TrimPrefix(cfg.WoffuCompanyURL, "https://")))
+	uiRow("Password", stFaint.Render("•••••••• in the system keychain"))
+
+	uiSection("Places")
+	uiRow("Office", stText.Render(fmt.Sprintf("%.5f, %.5f", cfg.Latitude, cfg.Longitude))+stFaint.Render("  office days"))
+	uiRow("Home", stText.Render(fmt.Sprintf("%.5f, %.5f", cfg.HomeLatitude, cfg.HomeLongitude))+stFaint.Render("  telework days"))
+
+	uiSection("Schedule")
+	week := weekOneLine(cfg.Schedule)
+	if cfg.ActiveSchedule != "" {
+		week += stFaint.Render("  (" + cfg.ActiveSchedule + ")")
+	}
+	uiRow("Week", stText.Render(week))
+	for _, p := range cfg.Seasons.Periods {
+		uiRow("Seasonal", stText.Render(fmt.Sprintf("%s %s → %s", p.Preset, dayMonth(p.From), dayMonth(p.To))))
+	}
+	if cfg.Timing.Active() {
+		uiRow("Timing", stText.Render("natural · "+cfg.Timing.Describe()))
+	} else {
+		uiRow("Timing", stText.Render("exact minute"))
+	}
+	if names := cfg.SchedulePresetNames(); len(names) > 0 {
+		uiRow("Presets", stSubtle.Render(strings.Join(names, ", ")))
+	}
+
+	uiSection("Who signs")
+	if agent.Supported() {
+		if agent.Installed() && agent.Loaded() {
+			uiRow("This Mac", stIn.Render("● on"))
+		} else {
+			uiRow("This Mac", stFaint.Render("○ off"))
+		}
+	}
+	switch {
+	case cfg.GithubFork == "":
+		uiRow("GitHub", stFaint.Render("○ not set up"))
+	default:
+		state := stFaint.Render("○ off")
+		if on, err := gh.IsAutoSignEnabled(cfg.GithubFork); err == nil && on {
+			state = stIn.Render("● on")
+		}
+		uiRow("GitHub", state+stFaint.Render("  "+cfg.GithubFork))
+	}
+
+	uiSection("Notifications")
+	if cfg.Telegram.BotToken != "" {
+		uiRow("Telegram", stIn.Render("● on"))
+	} else {
+		uiRow("Telegram", stFaint.Render("○ off"))
+	}
+	uiHint("woffux config edit", "woffux setup")
+}
+
 var configEditCmd = &cobra.Command{
 	Use:   "edit",
-	Short: "Edit a specific setting",
+	Short: "Change any setting",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
 		}
-
-		var field string
-		err = newForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("What do you want to change?").
-					Options(
-						huh.NewOption(fmt.Sprintf("Email           %s", cfg.WoffuEmail), "email"),
-						huh.NewOption("Password        ••••••••", "password"),
-						huh.NewOption(fmt.Sprintf("Office coords   %.4f, %.4f", cfg.Latitude, cfg.Longitude), "office"),
-						huh.NewOption(fmt.Sprintf("Home coords     %.4f, %.4f", cfg.HomeLatitude, cfg.HomeLongitude), "home"),
-						huh.NewOption(fmt.Sprintf("Schedule        %s", scheduleSummary(cfg.Schedule)), "schedule"),
-						huh.NewOption(fmt.Sprintf("Telegram        %s", telegramSummary(cfg.Telegram)), "telegram"),
-						huh.NewOption(fmt.Sprintf("GitHub fork     %s", cfg.GithubFork), "github"),
-					).
-					Value(&field),
-			),
-		).Run()
-		if err != nil {
-			return err
-		}
-
-		changed := false
-		syncNeeded := false
-		var afterSaveMessage string
-		var syncPassword string
-
-		switch field {
-		case "email":
-			oldEmail := cfg.WoffuEmail
-			err = newForm(
-				huh.NewGroup(
-					huh.NewInput().
-						Title("Email").
-						Value(&cfg.WoffuEmail).
-						Validate(func(s string) error {
-							if extractCompany(s) == "" {
-								return fmt.Errorf("enter a valid email")
-							}
-							return nil
-						}),
-				),
-			).Run()
-			if err == nil && cfg.WoffuEmail != oldEmail {
-				cfg.WoffuCompanyURL = "https://" + extractCompany(cfg.WoffuEmail) + ".woffu.com"
-				if pw, pwErr := config.GetPassword(oldEmail); pwErr == nil {
-					_ = config.SetPassword(cfg.WoffuEmail, pw)
-				} else {
-					fmt.Printf("  %s Password for the new email was not copied. Update it with %s.\n",
-						sWarn, sBold.Render("woffux config edit"))
-				}
-				changed = true
-				syncNeeded = true
-			}
-
-		case "password":
-			var pw string
-			err = newForm(
-				huh.NewGroup(
-					huh.NewInput().Title("New password").EchoMode(huh.EchoModePassword).Value(&pw),
-				),
-			).Run()
-			if err == nil && pw != "" {
-				if err := config.SetPassword(cfg.WoffuEmail, pw); err != nil {
-					return fmt.Errorf("save password: %w", err)
-				}
-				syncPassword = pw
-				syncNeeded = true
-				fmt.Printf("  %s Password updated in keychain\n", sOk)
-			}
-
-		case "office":
-			lat, lon, err := locationPickerWithMap("Office location", cfg.Latitude, cfg.Longitude)
-			if err == nil {
-				cfg.Latitude = lat
-				cfg.Longitude = lon
-				changed = true
-				syncNeeded = true
-			}
-
-		case "home":
-			lat, lon, err := locationPickerWithMap("Home location", cfg.HomeLatitude, cfg.HomeLongitude)
-			if err == nil {
-				cfg.HomeLatitude = lat
-				cfg.HomeLongitude = lon
-				changed = true
-				syncNeeded = true
-			}
-
-		case "schedule":
-			scheduleResult, err := scheduleWizard()
-			if err == nil {
-				err = applyScheduleWizardResult(cfg, scheduleResult)
-			}
-			if err == nil {
-				changed = true
-				syncNeeded = true
-				afterSaveMessage = scheduleWizardSavedPresetMessage(scheduleResult)
-			}
-
-		case "telegram":
-			tgCfg, err := telegramSetup()
-			if err == nil {
-				cfg.Telegram = tgCfg
-				changed = true
-				syncNeeded = true
-			}
-
-		case "github":
-			fmt.Printf("\n  Current fork: %s\n", cfg.GithubFork)
-			fmt.Printf("  To re-sync secrets and workflows, run: %s\n\n",
-				lipgloss.NewStyle().Bold(true).Render("woffux sync"))
-			return nil
-		}
-
-		if changed {
-			if err := config.Save(cfg); err != nil {
-				return fmt.Errorf("save config: %w", err)
-			}
-			fmt.Printf("  %s Config saved locally\n", sOk)
-			if afterSaveMessage != "" {
-				fmt.Print(afterSaveMessage)
-			}
-
-		}
-
-		// Explain sync and offer it. Password changes need this too even though
-		// the YAML config file itself does not change.
-		if syncNeeded && cfg.GithubFork != "" {
-			fmt.Println()
-			fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-				"  Your local settings changed. GitHub Actions still uses the old values.\n" +
-					"  Sync pushes your new settings so auto-signing uses them."))
-			fmt.Println()
-
-			var sync bool
-			if err := newForm(
-				huh.NewGroup(
-					huh.NewConfirm().
-						Title("Push changes to GitHub now?").
-						Description(fmt.Sprintf("This updates secrets and workflows on %s", cfg.GithubFork)).
-						Affirmative("Sync now").
-						Negative("I'll do it later (woffux sync)").
-						Value(&sync),
-				),
-			).Run(); err != nil {
+		for {
+			done, err := editOneSetting(cfg)
+			if err != nil || done {
 				return err
 			}
-
-			if sync {
-				if err := checkGhInstalled(); err != nil {
-					return err
-				}
-				if syncPassword == "" {
-					pw, err := config.GetPassword(cfg.WoffuEmail)
-					if err != nil {
-						return fmt.Errorf("get password for sync: %w", err)
-					}
-					syncPassword = pw
-				}
-
-				var syncErr error
-				spinner.New().
-					Title("Syncing to GitHub...").
-					Action(func() { syncErr = syncGitHubConfig(cfg, syncPassword) }).
-					Run()
-
-				if syncErr != nil {
-					fmt.Printf("  %s GitHub sync failed: %s\n", sWarn, syncErr)
-				} else {
-					fmt.Printf("  %s GitHub synced — auto-signing will use your new settings\n", sOk)
-				}
-			} else {
-				fmt.Printf("\n  %s Remember to run %s when you're ready.\n",
-					lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"),
-					lipgloss.NewStyle().Bold(true).Render("woffux sync"))
-				fmt.Println(lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(
-					"  Until then, auto-signing uses the previous settings."))
-			}
 		}
-
-		return nil
 	},
+}
+
+// editOneSetting shows the settings menu, applies one change and returns
+// done=true when the user picks "Done".
+func editOneSetting(cfg *config.Config) (bool, error) {
+	timingText := "exact minute"
+	if cfg.Timing.Active() {
+		timingText = cfg.Timing.Short()
+	}
+	signers := "nobody (manual)"
+	mac := agent.Supported() && agent.Installed() && agent.Loaded()
+	switch {
+	case mac && cfg.GithubFork != "":
+		signers = "this Mac + GitHub"
+	case mac:
+		signers = "this Mac"
+	case cfg.GithubFork != "":
+		signers = "GitHub"
+	}
+	tg := "off"
+	if cfg.Telegram.BotToken != "" {
+		tg = "on"
+	}
+	opt := func(label, value, key string) huh.Option[string] {
+		return huh.NewOption(fmt.Sprintf("%-15s %s", label, stFaint.Render(value)), key)
+	}
+	var field string
+	if err := newForm(huh.NewGroup(huh.NewSelect[string]().
+		Title("What would you like to change?").
+		Options(
+			opt("Schedule", config.ScheduleText(cfg.Schedule), "schedule"),
+			opt("Natural timing", timingText, "timing"),
+			opt("Who signs", signers, "signers"),
+			opt("Office", fmt.Sprintf("%.4f, %.4f", cfg.Latitude, cfg.Longitude), "office"),
+			opt("Home", fmt.Sprintf("%.4f, %.4f", cfg.HomeLatitude, cfg.HomeLongitude), "home"),
+			opt("Telegram", tg, "telegram"),
+			opt("Email", cfg.WoffuEmail, "email"),
+			opt("Password", "••••••••", "password"),
+			huh.NewOption(stSubtle.Render("Done"), "done"),
+		).
+		Value(&field))).Run(); err != nil {
+		return true, err
+	}
+
+	syncNeeded := false
+	var password string
+	switch field {
+	case "done":
+		return true, nil
+	case "schedule":
+		res, err := scheduleWizard(true)
+		if err != nil {
+			return false, nil
+		}
+		if err := applyScheduleWizardResult(cfg, res); err != nil {
+			return true, err
+		}
+		syncNeeded = true
+	case "timing":
+		t, err := timingWizard(cfg.Timing, cfg.Schedule)
+		if err != nil {
+			return false, nil
+		}
+		cfg.Timing = t
+		syncNeeded = true
+	case "signers":
+		plan, err := signerChoice(cfg)
+		if err != nil {
+			return false, nil
+		}
+		pw, _ := config.GetPassword(cfg.WoffuEmail)
+		applySigners(cfg, pw, plan)
+	case "office", "home":
+		lat, lon := cfg.Latitude, cfg.Longitude
+		title := "Office location"
+		if field == "home" {
+			lat, lon, title = cfg.HomeLatitude, cfg.HomeLongitude, "Home location (for telework days)"
+		}
+		nlat, nlon, err := locationPickerWithMap(title, lat, lon)
+		if err != nil {
+			return false, nil
+		}
+		if field == "home" {
+			cfg.HomeLatitude, cfg.HomeLongitude = nlat, nlon
+		} else {
+			cfg.Latitude, cfg.Longitude = nlat, nlon
+		}
+		syncNeeded = true
+	case "telegram":
+		tgCfg, err := telegramSetup()
+		if err != nil {
+			return false, nil
+		}
+		cfg.Telegram = tgCfg
+		syncNeeded = true
+	case "email":
+		email := cfg.WoffuEmail
+		if err := newForm(huh.NewGroup(huh.NewInput().Title("Woffu email").Value(&email).
+			Validate(func(s string) error {
+				if extractCompany(s) == "" {
+					return fmt.Errorf("enter a valid email")
+				}
+				return nil
+			}))).Run(); err != nil || email == cfg.WoffuEmail {
+			return false, nil
+		}
+		if pw, err := config.GetPassword(cfg.WoffuEmail); err == nil {
+			_ = config.SetPassword(email, pw)
+		} else {
+			uiWarn("The password wasn't copied to the new email — set it next.")
+		}
+		cfg.WoffuEmail = email
+		cfg.WoffuCompanyURL = "https://" + extractCompany(email) + ".woffu.com"
+		syncNeeded = true
+	case "password":
+		if err := newForm(huh.NewGroup(huh.NewInput().Title("New Woffu password").
+			Description("Stored in the system keychain.").
+			EchoMode(huh.EchoModePassword).Value(&password))).Run(); err != nil || password == "" {
+			return false, nil
+		}
+		if err := config.SetPassword(cfg.WoffuEmail, password); err != nil {
+			return true, fmt.Errorf("save password: %w", err)
+		}
+		uiOK("Password updated in the keychain")
+		syncNeeded = true
+	}
+
+	if field != "password" && field != "signers" {
+		if err := config.Save(cfg); err != nil {
+			return true, fmt.Errorf("save config: %w", err)
+		}
+		uiOK("Saved")
+	}
+	if syncNeeded && cfg.GithubFork != "" {
+		offerSync(cfg, password)
+	}
+	fmt.Println()
+	return false, nil
+}
+
+// offerSync pushes changed settings to the GitHub backup, explaining why.
+func offerSync(cfg *config.Config, password string) {
+	sync := true
+	if err := newForm(huh.NewGroup(huh.NewConfirm().
+		Title("Update the GitHub backup too?").
+		Description("It keeps using the old settings until it's synced.").
+		Affirmative("Sync now").Negative("Later (woffux sync)").Value(&sync))).Run(); err != nil || !sync {
+		uiWarn("GitHub still has the old settings — run woffux sync when ready.")
+		return
+	}
+	if err := checkGhInstalled(); err != nil {
+		uiWarn("Couldn't sync: %s", err)
+		return
+	}
+	if password == "" {
+		pw, err := config.GetPassword(cfg.WoffuEmail)
+		if err != nil {
+			uiErr("Couldn't read the password: %s", err)
+			return
+		}
+		password = pw
+	}
+	var syncErr error
+	spinner.New().Title("Syncing to GitHub…").Action(func() { syncErr = syncGitHubConfig(cfg, password) }).Run()
+	if syncErr != nil {
+		uiErr("GitHub sync failed: %s", syncErr)
+		return
+	}
+	uiOK("GitHub backup updated")
 }
 
 func init() {
@@ -277,11 +285,4 @@ func scheduleSummary(s config.Schedule) string {
 		dayLabel = "day"
 	}
 	return fmt.Sprintf("%d %s, %d signs", days, dayLabel, signs)
-}
-
-func telegramSummary(t config.TelegramConfig) string {
-	if t.BotToken != "" {
-		return "enabled"
-	}
-	return "not configured"
 }

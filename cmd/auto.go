@@ -2,10 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"sort"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/huh/spinner"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
@@ -53,12 +54,12 @@ var autoOnCmd = &cobra.Command{
 			Run()
 
 		if enableErr != nil {
-			fmt.Printf("\n  %s Could not enable: %s\n\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), enableErr)
+			uiErr("Could not enable: %s", enableErr)
 			return nil
 		}
 
-		fmt.Printf("\n  %s Auto-signing enabled\n\n", sOk)
+		fmt.Println()
+		uiOK("GitHub backup signer on")
 		return showAutoStatus(cfg.GithubFork, cfg)
 	},
 }
@@ -80,8 +81,8 @@ var autoOffCmd = &cobra.Command{
 		if err := newForm(
 			huh.NewGroup(
 				huh.NewConfirm().
-					Title("Disable auto-signing?").
-					Description("Woffu will no longer be clocked automatically").
+					Title("Turn off the GitHub backup signer?").
+					Description("If this Mac's agent is off too, nothing will sign for you.").
 					Affirmative("Disable").
 					Negative("Cancel").
 					Value(&confirm),
@@ -101,12 +102,13 @@ var autoOffCmd = &cobra.Command{
 			Run()
 
 		if disableErr != nil {
-			fmt.Printf("\n  %s Could not disable: %s\n\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), disableErr)
+			uiErr("Could not disable: %s", disableErr)
 			return nil
 		}
 
-		fmt.Printf("\n  %s Auto-signing disabled\n\n", sOk)
+		fmt.Println()
+		uiOK("GitHub backup signer off")
+		fmt.Println()
 		return nil
 	},
 }
@@ -137,39 +139,49 @@ func showAutoStatus(repo string, cfg *config.Config) error {
 		return nil
 	}
 
-	sActive := lipgloss.NewStyle().Foreground(lipgloss.Color("82")).Bold(true)
-	sDisabled := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	sName := lipgloss.NewStyle().Width(20)
-
-	fmt.Printf("\n  Repo: %s\n\n", sBold.Render(repo))
-
+	uiTitle("GitHub backup signer", repo)
+	signing := false
+	sort.SliceStable(workflows, func(i, j int) bool { return workflows[i].Name == "Auto Sign" })
 	for _, w := range workflows {
-		status := sActive.Render("active")
-		if w.State != "active" {
-			status = sDisabled.Render("disabled")
+		switch w.Name {
+		case "Auto Sign":
+			signing = w.State == "active"
+			if signing {
+				uiRow("Signing", stIn.Render("● on")+stFaint.Render("  signs when this Mac can't, a few minutes after it"))
+			} else {
+				uiRow("Signing", stFaint.Render("○ off"))
+			}
+		case "Keepalive":
+			if w.State == "active" {
+				uiRow("Keepalive", stSubtle.Render("on")+stFaint.Render("  stops GitHub pausing it after 60 days"))
+			} else {
+				uiRow("Keepalive", stOut.Render("off")+stFaint.Render("  GitHub may pause signing after 60 days"))
+			}
 		}
-		fmt.Printf("  %s %s\n", sName.Render(w.Name), status)
 	}
-
-	// Show sync status
+	if createdAt, conclusion, ok, err := gh.LastScheduledRun(repo); err == nil && ok {
+		if t, perr := time.Parse(time.RFC3339, createdAt); perr == nil {
+			res := stIn.Render("ok")
+			if conclusion != "success" {
+				res = stBad.Render(orDefaultStr(conclusion, "running"))
+			}
+			uiRow("Last run", stText.Render(t.Local().Format("Mon 2 Jan 15:04"))+"  "+res)
+		}
+	}
 	if cfg != nil {
-		fmt.Println()
-		if syncErr != nil {
-			fmt.Printf("  %s Could not check sync: %s\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"), syncErr)
-		} else if inSync {
-			fmt.Printf("  %s Schedule in sync with local config\n", sActive.Render("✓"))
-		} else {
-			fmt.Printf("  %s Schedule out of sync — run %s to update\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true).Render("⚠"),
-				sBold.Render("woffux sync"))
+		switch {
+		case syncErr != nil:
+			uiRow("Settings", stOut.Render("couldn't check: "+syncErr.Error()))
+		case inSync:
+			uiRow("Settings", stIn.Render("✓ up to date"))
+		default:
+			uiRow("Settings", stOut.Render("! outdated")+stFaint.Render("  run woffux sync"))
 		}
 	}
-
-	fmt.Println()
-	fmt.Printf("  Toggle: %s / %s\n\n",
-		sBold.Render("woffux auto on"),
-		sBold.Render("woffux auto off"))
-
+	if signing {
+		uiHint("woffux auto off", "woffux open github")
+	} else {
+		uiHint("woffux auto on", "woffux open github")
+	}
 	return nil
 }

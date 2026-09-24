@@ -38,7 +38,7 @@ This command makes GitHub match it.`,
 		if cfg.GithubFork == "" {
 			fmt.Println()
 			fmt.Printf("  %s GitHub is not configured.\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("!"))
+				lipgloss.NewStyle().Foreground(obOut).Render("!"))
 			fmt.Printf("  Run %s to set up auto-signing.\n\n",
 				lipgloss.NewStyle().Bold(true).Render("woffux setup"))
 			return nil
@@ -49,9 +49,9 @@ This command makes GitHub match it.`,
 			return fmt.Errorf("cannot get password from keychain: %w\n\n  Run 'woffux setup' to reconfigure", err)
 		}
 
-		sLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(22)
-		sOkIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e")).Bold(true)
-		sErrIcon := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444")).Bold(true)
+		sLabel := lipgloss.NewStyle().Foreground(obFaint).Width(22)
+		sOkIcon := lipgloss.NewStyle().Foreground(obIn).Bold(true)
+		sErrIcon := lipgloss.NewStyle().Foreground(obBad).Bold(true)
 
 		fmt.Println()
 		fmt.Printf("  Syncing local config → %s\n\n", lipgloss.NewStyle().Bold(true).Render(cfg.GithubFork))
@@ -71,7 +71,10 @@ This command makes GitHub match it.`,
 			if cfg.Telegram.BotToken != "" {
 				details += ", telegram"
 			}
-			fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Secrets"), lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(details))
+			if cfg.Timing.Active() {
+				details += ", natural timing"
+			}
+			fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Secrets"), lipgloss.NewStyle().Foreground(obFaint).Render(details))
 		}
 
 		// Step 2: Workflows
@@ -86,7 +89,7 @@ This command makes GitHub match it.`,
 		} else {
 			days, signs := scheduleStats(cfg.Schedule)
 			fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Workflows"),
-				lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render(fmt.Sprintf("%d days, %d signs, tz=%s", days, signs, cfg.Timezone)))
+				lipgloss.NewStyle().Foreground(obFaint).Render(fmt.Sprintf("%d days, %d signs, tz=%s%s", days, signs, cfg.Timezone, seasonsNote(cfg))))
 		}
 
 		// Step 3: Refresh cron triggers without changing a disabled auto-sign state.
@@ -102,10 +105,10 @@ This command makes GitHub match it.`,
 				fmt.Printf("  %s %s%s\n", sErrIcon.Render("✗"), sLabel.Render("Cron reload"), reloadErr)
 			} else if !reloaded {
 				fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Cron reload"),
-					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("auto-sign disabled, skipped"))
+					lipgloss.NewStyle().Foreground(obFaint).Render("auto-sign disabled, skipped"))
 			} else {
 				fmt.Printf("  %s %s%s\n", sOkIcon.Render("✓"), sLabel.Render("Cron reload"),
-					lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Render("triggers refreshed"))
+					lipgloss.NewStyle().Foreground(obFaint).Render("triggers refreshed"))
 			}
 		}
 
@@ -151,4 +154,11 @@ func scheduleStats(s config.Schedule) (days, signs int) {
 		}
 	}
 	return days, signs
+}
+
+func seasonsNote(cfg *config.Config) string {
+	if len(cfg.Seasons.Periods) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", %d seasonal %s", len(cfg.Seasons.Periods), pluralS(len(cfg.Seasons.Periods), "switch", "switches"))
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
@@ -57,46 +56,7 @@ Examples:
 			})
 		}
 
-		// TTY
-		sLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Width(16)
-		sVal := lipgloss.NewStyle().Bold(true)
-		sIn := lipgloss.NewStyle().Foreground(lipgloss.Color("#22c55e"))
-		sOut := lipgloss.NewStyle().Foreground(lipgloss.Color("#ef4444"))
-		sDim := lipgloss.NewStyle().Foreground(lipgloss.Color("#6b7280"))
-
-		workingDay := sIn.Render("yes")
-		if !info.IsWorkingDay {
-			workingDay = sOut.Render("no")
-		}
-
-		fmt.Println()
-		fmt.Println("  " + sLabel.Render("Date") + sVal.Render(info.Date))
-		fmt.Println("  " + sLabel.Render("Working day") + workingDay)
-		fmt.Println("  " + sLabel.Render("Mode") + fmt.Sprintf("%s %s", info.Mode.Emoji(), info.Mode.Label()))
-		if info.IsWorkingDay {
-			fmt.Println("  " + sLabel.Render("Coordinates") + sDim.Render(fmt.Sprintf("%.4f, %.4f", info.Latitude, info.Longitude)))
-		}
-
-		// Slots
-		fmt.Println()
-		if len(slots) == 0 {
-			fmt.Println("  " + sDim.Render("No sign slots today"))
-		} else {
-			fmt.Println("  " + sVal.Render("Sign slots"))
-			for i, s := range slots {
-				in := sDim.Render("—")
-				out := sDim.Render("—")
-				if s.In != "" {
-					in = sIn.Render("IN  " + slotTime(s.In))
-				}
-				if s.Out != "" {
-					out = sOut.Render("OUT " + slotTime(s.Out))
-				}
-				fmt.Printf("    Block %d:  %s  %s\n", i+1, in, out)
-			}
-		}
-		fmt.Println()
-
+		viewToday(info, slots)
 		return nil
 	},
 }

@@ -162,11 +162,13 @@ GitHub setup is automatic: woffux forks this repo into your account, stores your
 ## Requests
 
 ```bash
-woffux request                                        # interactive
-woffux request -t Teletrabajo -d 2026-10-05,2026-10-07
-woffux requests                                       # list
-woffux request cancel 17117405
+woffux request                                        # pick the type (with your balance) and tick the days
+woffux request -t Vacaciones -d 2026-10-05,2026-10-07 # or in one line
+woffux requests                                       # pending, upcoming, past
+woffux request cancel                                 # pick from your pending/upcoming requests
 ```
+
+The interactive picker only lists working days without a request, so every option is one Woffu will accept, and it tells you how your balance will look afterwards before anything is sent.
 
 Or use the calendar in the dashboard: select days, press `t` or `v`, confirm.
 
@@ -177,7 +179,7 @@ Or use the calendar in the dashboard: select days, press `t` or `v`, confirm.
 | `woffux` | Dashboard (starts setup the first time) |
 | `woffux setup` | Guided setup; run again any time to review it |
 | `woffux status` / `today` | Today: working day, mode, signs |
-| `woffux sign` | Clock in/out now |
+| `woffux sign` | Clock in/out now (asks first in a terminal; `-y` skips) |
 | `woffux schedule` · `set` · `edit` · `save` · `load` · `list` · `delete` · `push` | Your week and presets |
 | `woffux timing [natural\|relaxed\|exact\|custom]` | Natural timing |
 | `woffux agent on\|off\|status` | Sign from this Mac |
@@ -185,7 +187,7 @@ Or use the calendar in the dashboard: select days, press `t` or `v`, confirm.
 | `woffux sync` | Push settings to GitHub |
 | `woffux events` | Vacation days and hours left |
 | `woffux calendar` · `holidays` · `history` · `requests` | Query Woffu |
-| `woffux request` · `request cancel <id>` | Create / cancel requests |
+| `woffux request` · `request cancel [id]` | Create / cancel requests (interactive lists) |
 | `woffux config` · `config edit` | See / change any setting |
 | `woffux open [docs\|calendar\|github]` | Open in the browser |
 | `woffux update` | Update to the latest version |

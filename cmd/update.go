@@ -41,7 +41,7 @@ var updateCmd = &cobra.Command{
 	Aliases: []string{"upgrade"},
 	Short:   "Update woffux to the latest version",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+		sLabel := lipgloss.NewStyle().Foreground(obFaint)
 
 		fmt.Printf("\n  %s %s\n", sLabel.Render("Current version:"), sBold.Render(Version))
 
@@ -123,7 +123,7 @@ var updateCmd = &cobra.Command{
 
 		if downloadErr != nil {
 			fmt.Printf("  %s %s\n\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"), downloadErr)
+				lipgloss.NewStyle().Foreground(obBad).Render("✗"), downloadErr)
 			return nil
 		}
 
@@ -146,7 +146,7 @@ var updateCmd = &cobra.Command{
 			if err := sudoMv.Run(); err != nil {
 				keepTemp = true
 				fmt.Printf("\n  %s Install failed. Try manually:\n",
-					lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("✗"))
+					lipgloss.NewStyle().Foreground(obBad).Render("✗"))
 				fmt.Printf("    sudo mv %q %q\n\n", tmpPath, currentPath)
 				return nil
 			}

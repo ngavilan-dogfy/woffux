@@ -84,7 +84,7 @@ var skillStatusCmd = &cobra.Command{
 		dest, err := skillPath()
 		if err != nil {
 			fmt.Printf("\n  %s Cannot determine skill path: %s\n\n",
-				lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("!"), err)
+				lipgloss.NewStyle().Foreground(obBad).Render("!"), err)
 			return
 		}
 

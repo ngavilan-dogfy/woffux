@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -37,9 +38,10 @@ var agentOnCmd = &cobra.Command{
 		if err := agent.Install(); err != nil {
 			return err
 		}
-		fmt.Printf("  %s Local agent installed (runs at %s every hour)\n", sOk, agent.MinutesLabel())
-		fmt.Printf("    Log: %s\n", agent.LogPath())
-		fmt.Println("    GitHub auto-sign remains as fallback for when this Mac is asleep.")
+		fmt.Println()
+		uiOK("This Mac will sign for you while it's awake")
+		uiLine(stFaint.Render("  Log: " + agent.LogPath()))
+		fmt.Println()
 		return nil
 	},
 }
@@ -51,7 +53,9 @@ var agentOffCmd = &cobra.Command{
 		if err := agent.Uninstall(); err != nil {
 			return err
 		}
-		fmt.Printf("  %s Local agent removed. GitHub auto-sign (if enabled) keeps working.\n", sOk)
+		fmt.Println()
+		uiOK("This Mac stopped signing (the GitHub backup, if on, keeps working)")
+		fmt.Println()
 		return nil
 	},
 }
@@ -71,28 +75,60 @@ func init() {
 }
 
 func agentStatus() error {
+	uiTitle("This Mac signer", "local agent")
 	if !agent.Supported() {
-		fmt.Println("  Local agent: unsupported on this OS (macOS only)")
+		uiLine(stFaint.Render("Only available on macOS. Use the GitHub backup: woffux auto on"))
+		fmt.Println()
 		return nil
 	}
-
-	installed := agent.Installed()
-	loaded := agent.Loaded()
-
+	installed, loaded := agent.Installed(), agent.Loaded()
 	switch {
 	case installed && loaded:
-		fmt.Printf("  %s Local agent: active (runs at %s)\n", sOk, agent.MinutesLabel())
-	case installed && !loaded:
-		fmt.Printf("  %s Local agent: installed but not loaded — run 'woffux agent on' to fix\n", sWarn)
+		uiRow("State", stIn.Render("● on")+stFaint.Render("  checks at "+agent.MinutesLabel()+" and waits for each sign's moment"))
+	case installed:
+		uiRow("State", stOut.Render("! installed but not running")+stFaint.Render("  fix: woffux agent on"))
 	default:
-		fmt.Printf("  %s Local agent: not installed — run 'woffux agent on'\n", sWarn)
+		uiRow("State", stFaint.Render("○ off")+stFaint.Render("  turn on: woffux agent on"))
 	}
+	uiRow("Log", stSubtle.Render(agent.LogPath()))
 
-	if lines := agent.RecentLog(6); len(lines) > 0 {
-		fmt.Println("\n  Recent activity:")
-		for _, line := range lines {
-			fmt.Printf("    %s\n", line)
+	if lines := agent.RecentLog(12); len(lines) > 0 {
+		uiSection("Recent activity")
+		// Collapse repeats ("skipped … not a working day ×7").
+		for i := 0; i < len(lines); {
+			j := i
+			for j+1 < len(lines) && lines[j+1] == lines[i] {
+				j++
+			}
+			out := agentLogLine(lines[i])
+			if j > i {
+				out += stFaint.Render(fmt.Sprintf("  ×%d", j-i+1))
+			}
+			uiLine(out)
+			i = j + 1
 		}
 	}
+	fmt.Println()
 	return nil
+}
+
+// agentLogLine colours one agent log line by what happened.
+func agentLogLine(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, fields[0]))
+	switch fields[0] {
+	case "OK":
+		return stIn.Render("✓ signed  ") + stText.Render(rest)
+	case "WAIT":
+		return stBrand.Render("◷ waiting ") + stSubtle.Render(rest)
+	case "SKIP":
+		return stFaint.Render("· skipped " + rest)
+	}
+	if strings.HasPrefix(line, "Error") || strings.Contains(strings.ToLower(line), "fail") {
+		return stBad.Render("✗ ") + stText.Render(line)
+	}
+	return stSubtle.Render(line)
 }
