@@ -1,443 +1,279 @@
 <p align="center">
-  <img src="assets/logo.png" alt="woffux" width="280">
+  <img src="assets/logo.png" alt="woffux" width="240">
 </p>
 
 <h1 align="center">woffux</h1>
 
-<p align="center">Automatic clock in/out for <a href="https://app.woffu.com">Woffu</a>. Set it up once, never think about it again.</p>
+<p align="center"><strong>Your <a href="https://www.woffu.com">Woffu</a> clock-ins, on autopilot.</strong><br>
+Set your week once. woffux signs in and out for you, at natural moments, skipping holidays and days off — and shows you everything in a friendly terminal dashboard.</p>
 
 <p align="center">
   <a href="https://github.com/ngavilan-dogfy/woffux/releases/latest"><img src="https://img.shields.io/github/v/release/ngavilan-dogfy/woffux?style=flat-square&color=7c3aed&label=release" alt="Release"></a>
   <a href="https://github.com/ngavilan-dogfy/woffux/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/ngavilan-dogfy/woffux/release.yml?style=flat-square&label=build" alt="Build"></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square" alt="Platform">
-  <img src="https://img.shields.io/badge/go-%3E%3D1.24-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
 </p>
 
-<br>
+<p align="center">
+  <img src="assets/screenshot-today.png" alt="woffux dashboard: today at a glance" width="860">
+</p>
 
-## What it does
-
-- Clocks in/out on Woffu **automatically** via GitHub Actions
-- Detects holidays, absences, and telework (approved **or pending**)
-- Uses office or home GPS coordinates based on your work mode
-- **Create and cancel requests** (telework, vacation, absence) from the CLI
-- Sends **Telegram notifications** on every sign (optional)
-- **Interactive TUI** — today at a glance, calendar requests in one keystroke, command palette
-- Fully **scriptable** — `--json` and `--plain` output on all query commands
-
-## Install
-
-### One-liner (recommended)
+## Get started in two minutes
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ngavilan-dogfy/woffux/main/install.sh | sh
-```
-
-Downloads the correct binary for your OS/arch. No dependencies.
-
-### Other options
-
-<details>
-<summary><strong>Download binary manually</strong></summary>
-
-Go to [Releases](https://github.com/ngavilan-dogfy/woffux/releases/latest) and download:
-
-| Platform | File |
-|---|---|
-| macOS Apple Silicon (M1+) | `woffux-darwin-arm64` |
-| macOS Intel | `woffux-darwin-amd64` |
-| Linux x64 | `woffux-linux-amd64` |
-| Linux ARM64 | `woffux-linux-arm64` |
-
-```bash
-chmod +x woffux-darwin-arm64
-sudo mv woffux-darwin-arm64 /usr/local/bin/woffux
-```
-
-</details>
-
-<details>
-<summary><strong>Build from source (Go 1.24+)</strong></summary>
-
-```bash
-go install github.com/ngavilan-dogfy/woffux/cmd/woffux@latest
-```
-
-Or clone and build:
-
-```bash
-git clone https://github.com/ngavilan-dogfy/woffux.git
-cd woffux
-go build -o woffux ./cmd/woffux
-sudo mv woffux /usr/local/bin/
-```
-
-</details>
-
-### Prerequisites
-
-[**Git**](https://git-scm.com) is required for setup and syncing workflows to your fork.
-
-The [**GitHub CLI**](https://cli.github.com) is needed for auto-signing. The setup wizard checks for it and guides you through installation if missing.
-
-```bash
-brew install git gh        # macOS
-sudo apt install git gh    # Debian/Ubuntu
-sudo dnf install git gh    # Fedora
-```
-
-Then: `gh auth login`
-
-### Update
-
-```bash
-woffux update
-# or
-woffux upgrade
-```
-
-Releases are versioned automatically from pushes to `main` using Conventional Commits:
-
-| Commit type | Version bump |
-|---|---|
-| `fix:` / `perf:` | Patch (`v1.2.3` → `v1.2.4`) |
-| `feat:` | Minor (`v1.2.3` → `v1.3.0`) |
-| `type!:` or `BREAKING CHANGE:` | Major (`v1.2.3` → `v2.0.0`) |
-
-Other types such as `docs:`, `ci:`, and `chore:` do not create a release. Add `[skip release]` to a commit message to exclude it from version calculation.
-
-## Setup
-
-```bash
-woffux setup
-```
-
-You only need your **email** and **password**. The wizard auto-detects everything else:
-
-```
-woffux setup
-
-  ✓ GitHub CLI ready
-
-┃ Email: ngavilan@dogfydiet.com
-┃ Password: ••••••••
-
-◯ Signing in to dogfydiet.woffu.com...
-
-  ✓ Logged in as NAHUEL GAVILAN BERNAL
-  → Dogfy Diet — IT, Senior Platform Engineer
-  → Office: Oficinas Landmark
-
-┃ Home location > Paste a Google Maps URL
-  ✓ 41.385064, 2.173404
-
-┃ Auto-sign schedule > Standard split (8.5h)
-
-┃ Enable Telegram? Yes
-  ◯ Sending test message...
-  ✓ Test message sent!
-
-◯ Setting up GitHub...
-  ✓ Secrets + workflows configured
-
-All set!
-```
-
-## Commands
-
-### Querying
-
-| Command | Description | Flags |
-|---|---|---|
-| `woffux status` | Today: working day, mode, coordinates | `--json` `--plain` |
-| `woffux today` | Detailed day info + today's sign slots | `--json` |
-| `woffux events` | Remaining vacations, hours, personal days | `--json` `--plain` |
-| `woffux requests` | Your requests (telework, vacation, absence) | `--json` `--plain` `--page` `--size` |
-| `woffux history` | Sign history (clock in/out records) | `--json` `--plain` `--from` `--to` `-d` |
-| `woffux calendar` | Working days, holidays, telework for a month | `--json` `--plain` `-m` |
-| `woffux holidays` | Company calendar holidays | `--json` `--plain` |
-| `woffux schedule` | View auto-sign schedule | `--json` |
-| `woffux whoami` | Current user profile | `--json` |
-
-### Actions
-
-| Command | Description |
-|---|---|
-| `woffux sign` | Clock in/out right now |
-| `woffux sign --force` | Sign even on non-working days |
-| `woffux sign --expected in` | Only sign IN (skip if already signed in) |
-| `woffux sign --expected out` | Only sign OUT (skip if already signed out) |
-| `woffux request` | Create a request (telework, vacation, absence) |
-| `woffux request -t Teletrabajo -d 2026-03-20` | Request telework for a specific date |
-| `woffux request cancel <id>` | Cancel a request |
-| `woffux auto` | Check if auto-signing is active |
-| `woffux auto on` / `off` | Toggle auto-signing |
-| `woffux open` | Open Woffu dashboard in browser |
-| `woffux open docs` | Open personal documents |
-| `woffux open calendar` | Open calendar view |
-| `woffux open github` | Open GitHub fork actions |
-
-### Configuration
-
-| Command | Description |
-|---|---|
-| `woffux setup` | Full setup wizard |
-| `woffux config` | View all settings at a glance |
-| `woffux config edit` | Change any individual setting |
-| `woffux schedule` | View current auto-sign schedule |
-| `woffux schedule edit` | Edit schedule with presets or custom blocks |
-| `woffux schedule list` | List saved schedule presets |
-| `woffux schedule save <name>` | Save current schedule as a named preset |
-| `woffux schedule load <name>` | Load a saved preset (and sync workflows) |
-| `woffux schedule delete <name>` | Delete a saved preset |
-| `woffux schedule push` | Push schedule to GitHub workflows |
-| `woffux sync` | Push local config to GitHub |
-| `woffux update` / `woffux upgrade` | Update to latest version |
-| `woffux --version` | Show current version |
-
-## Output modes
-
-All query commands auto-detect your terminal:
-
-| Context | Format | Use case |
-|---|---|---|
-| Terminal | Colored, human-friendly | Reading |
-| Piped (`\|`, `>`) | TSV (tab-separated) | `awk`, `grep`, `cut` |
-| `--json` | Structured JSON | `jq`, scripting |
-| `--plain` | Force TSV in terminal | Consistent output |
-
-### Scripting examples
-
-```bash
-# How many vacation days left?
-woffux events --json | jq '.[] | select(.name == "Vacaciones") | .available'
-
-# Approved telework days this month
-woffux requests --json | jq '[.[] | select(.event_name | contains("Teletrabajo")) | select(.status == "approved")] | length'
-
-# Next holiday
-woffux holidays --json | jq '.[0]'
-
-# Export calendar to CSV
-woffux calendar --plain > march.tsv
-
-# Am I clocked in right now?
-woffux today --json | jq '.slots[-1].out // "still clocked in"'
-
-# Request telework for next week
-woffux request -t Teletrabajo -d 2026-03-23,2026-03-25,2026-03-27
-
-# Cancel all pending requests
-woffux requests --json | jq -r '.[] | select(.status == "pending") | .request_id' | xargs -I{} woffux request cancel {}
-```
-
-## Interactive TUI
-
-```bash
 woffux
 ```
 
-Three screens, each answering one question:
+The first time you run `woffux`, a guided setup walks you through six short steps:
 
-- **Today** — *where do I stand?* Clocked in / on a break / done / holiday at a
-  glance, hours worked against today's target, what the next sign is and
-  **who will do it** (this Mac, GitHub, or you). A timeline shows plan vs.
-  reality so a missed sign stands out, next to this week's hours per day and
-  the autopilot's health.
-- **Calendar** — the month with every day's type (office, remote, time off,
-  holiday), pending requests and days you worked without signing. Select days
-  and request telework or vacation, or cancel requests, in one keystroke.
-- **Balance** — days and hours left, requests waiting for approval, upcoming
-  holidays.
+1. **Woffu account** — the email and password you already use. The password goes to your system keychain.
+2. **Locations** — your office (usually found in Woffu automatically) and your home, for telework days.
+3. **Work schedule** — pick a template or just type your week: `L-J 8:30-13:30 14:15-17:30, V 8-15`. Summer hours too.
+4. **Natural timing** — sign a few minutes around the scheduled time instead of at the exact same second every day.
+5. **Who signs** — this Mac, GitHub Actions, or both.
+6. **Notifications** — optional Telegram message on every sign.
 
-Everything that talks to Woffu (signing, requests, cancellations) asks for
-confirmation first and says exactly what will be sent.
+Nothing is signed during setup. At the end you see a summary and exactly when the next automatic sign will happen.
+
+## What it does
+
+- **Signs for you**: in and out, every working day, following your schedule.
+- **Knows your calendar**: public holidays, vacation, absences and other days off in Woffu are skipped. On telework days it signs from home, on office days from the office.
+- **Looks human**: *natural timing* lands every sign on a slightly different minute, leaning the safe way (in a bit early, out a bit late), so your day is never shorter than planned.
+- **Never double-signs**: every signer works out the same moment and checks what's already registered before acting. Every sign is verified afterwards.
+- **Summer hours on their own**: define your *jornada intensiva* once with dates. woffux switches on 1 July and back in September.
+- **Requests in one keystroke**: telework, vacation, personal days and hours, from the calendar. It shows your balance and asks before sending.
+- **Scriptable**: every query command speaks `--json` and TSV.
+
+## The dashboard
+
+Run `woffux`. Three screens, each answering one question:
+
+| | |
+|---|---|
+| **Today** — *Where do I stand?* Working, on a break, done, or a holiday. Hours worked against today's target, the next sign and **who** will make it and when, a timeline of plan vs. reality, your week and the autopilot's health. | <img src="assets/screenshot-today.png" width="420"> |
+| **Calendar** — the month at a glance: office, remote, time off, holidays, pending requests, and ✓ / ! for days signed or worked without signing. Select days (ranges too) and press `t` for telework or `v` for vacation. | <img src="assets/screenshot-calendar.png" width="420"> |
+| **Command palette** — press `Enter`, `:` or `Ctrl+K` and type. Every action is there, with its shortcut. | <img src="assets/screenshot-palette.png" width="420"> |
+
+Anything that writes to Woffu (a sign, a request, a cancellation) asks first and tells you exactly what will be sent.
+
+<details>
+<summary><strong>Keyboard shortcuts</strong></summary>
 
 | Key | Action |
 |---|---|
-| `Enter` / `:` / `Ctrl+K` | Command palette — every action, type to filter |
-| `Tab` / `1-3` | Switch screens |
-| `s` | Clock in/out (with confirmation) |
-| `r` | Refresh data |
-| `m` | Toggle signing from this Mac (local agent) |
-| `a` | Toggle the GitHub backup signer |
+| `Enter` / `:` / `Ctrl+K` | Command palette |
+| `1` `2` `3` / `Tab` | Today · Calendar · Balance |
+| `s` | Clock in / out now (asks first) |
+| `r` | Refresh |
+| `m` | Sign from this Mac on / off |
+| `a` | GitHub backup signer on / off |
 | `e` | Edit schedule |
 | `o` / `g` | Open Woffu / GitHub Actions |
 | `?` | All shortcuts |
 | `q` | Quit |
 
-In the calendar: arrows or `hjkl` move, `[` `]` change month, `.` jumps to
-today, `space` selects a day, `Shift+arrows` selects a range, `t` `v` `p` `b`
-request telework / vacation / personal day / hours pool, `c` cancels requests
-and `Esc` clears the selection.
+In the calendar: arrows or `hjkl` move, `[` `]` change month, `.` jumps to today, `space` selects, `Shift+arrows` selects a range, `t` `v` `p` `b` request telework / vacation / personal day / hours, `c` cancels requests, `Esc` clears the selection.
 
-## Auto-signing
+</details>
 
-Two cooperating signers clock you in/out on schedule:
+## Your schedule
 
-- **Local agent (primary, macOS)** — `woffux agent on` installs a launchd
-  agent that runs every 15 minutes and signs the moment a scheduled event is
-  due. It reads the active schedule from your local config on every run, so
-  changing schedule or preset needs **no re-sync**. Signs fire on time
-  whenever your Mac is awake. Toggle with `woffux agent on/off`, inspect with
-  `woffux agent status`.
-- **GitHub Actions (fallback)** — cron-triggered workflow for when your Mac
-  is asleep. Toggle with `woffux auto on/off`. Note: GitHub cron schedules
-  are best-effort and routinely fire **hours** late or get dropped; treat
-  this as a safety net, not the primary signer.
+<p align="center"><img src="assets/schedule-editor.gif" alt="Typing a schedule with live preview" width="720"></p>
 
-Both are idempotent: a scheduled event that already has a matching sign is
-never signed again, so the two can't double-toggle each other.
-
-Every sign is **verified**: after signing, woffux re-reads today's slots and
-fails loudly (non-zero exit + Telegram alert) if Woffu didn't register it.
-
-| Day | Default times (CET) |
-|---|---|
-| Mon — Thu | 08:30, 13:30, 14:15, 17:30 |
-| Fri | 08:00, 15:00 |
-
-Each run adds a random 2–5 min delay for variance.
-
-### Smart sign guard
-
-Auto-sign uses the `--expected` flag to prevent toggling you in the wrong direction. Each scheduled time knows whether it should be an IN or OUT:
-
-- If you **manually sign IN** before the scheduled IN time, the auto-sign detects you're already signed in and **skips** (instead of accidentally signing you OUT).
-- If you **manually sign OUT** before the scheduled OUT time, same logic — it **skips**.
-- Sends a Telegram notification when a sign is skipped.
-
-This is fully automatic after syncing — no configuration needed.
-
-### Schedule presets
-
-```
-> Standard split (8.5h)   IN 08:30  OUT 13:30  IN 14:15  OUT 17:30
-  Intensive (6h)          IN 08:00  OUT 14:00
-  Morning shift (7h)      IN 07:00  OUT 14:00
-  Flexible (8h)           IN 09:00  OUT 14:00  IN 15:00  OUT 18:00
-  Custom — pick days and define blocks
-```
-
-Custom schedules support multi-select days, per-day blocks, and can be saved as named presets (e.g., "summer", "winter") to switch between them.
-
-Manage presets from the CLI:
+The fastest way to describe a week is to write it:
 
 ```bash
-# Save current schedule
-woffux schedule save summer
-
-# List all saved presets
-woffux schedule list
-
-# Switch to a preset (syncs workflows automatically)
-woffux schedule load winter
-
-# Delete a preset
-woffux schedule delete old-schedule
+woffux schedule set "mon-thu 8:30-13:30 14:15-17:30, fri 8-15"
+woffux schedule set "L-V 9-14 15-18"            # Spanish day letters: L M X J V
+woffux schedule set "weekdays 8-15"
 ```
 
-In the TUI, open the command palette (`Enter`) and type the preset name to switch, or pick "Save schedule as…" to name the current one.
+- **Days**: `mon`…`fri`, `lunes`…`viernes`, `L M X J V`, ranges (`mon-thu`, `L-J`), lists (`L+X+V`), `weekdays`.
+- **Times**: `8`, `8:30`, `8.30`, `0830` or `15h`.
+- Days you don't mention are days off. Mistakes are explained ("times must go forward (01:00)").
 
-### Syncing
+Prefer a guided editor? `woffux schedule edit` offers templates (split day with short Friday, split all week, *intensiva*, early shift) and your saved presets. You can also write the week directly or go day by day. You always see the week drawn before saving.
 
-Your local config (`~/.woffux.yaml`) is the source of truth. Run `woffux sync` to push changes to GitHub so auto-signing uses your latest settings.
+**Summer hours.** Answer "yes" to *Different hours in summer?* and choose the dates (for example 1/7 → 31/8). woffux keeps two presets and switches between them by itself every year. The Mac signer follows the switch on its own; the GitHub backup picks it up after `woffux sync`, and the dashboard reminds you.
+
+**Presets.** Keep several schedules and switch in a second: `woffux schedule save winter`, `woffux schedule load winter`, `woffux schedule list`, or from the palette in the dashboard.
+
+`woffux schedule` shows everything: the week, timing, seasonal switches and the next change.
+
+## Natural timing
+
+Signing at 08:30:00 every single day is the pattern that makes automated clock-ins obvious. With natural timing each automatic sign happens at its own moment:
+
+```
+$ woffux timing
+  Natural timing IN 0–6 min early · OUT 0–8 min late
+
+  Mon 28  08:27  13:32  14:13  17:31
+  Tue 29  08:30  13:33  14:13  17:31
+  Wed 30  08:24  13:31  14:10  17:34
+```
+
+The rules are designed around what HR looks at:
+
+- **Lean the safe way.** You clock in a little early rather than late, and out a little late rather than early.
+- **Never short.** A work block is never shorter than planned: if the IN moves later, its OUT moves at least as much.
+- **Human-shaped.** Moments cluster around the middle of the window instead of being uniformly random, and change every day.
+- **Consistent.** Moments come from a private per-install seed and the date. This Mac, the GitHub backup and the dashboard all compute the same instant, so they never race each other.
+
+| Preset | Window |
+|---|---|
+| `natural` (recommended) | IN up to 6 min early / 1 late · OUT up to 8 min late |
+| `relaxed` | IN up to 12 min early / 2 late · OUT up to 15 min late |
+| `exact` | the scheduled minute |
 
 ```bash
-woffux sync
-
-  Syncing local config → yourusername/woffux
-
-  ✓ Secrets               email, password, office (41.35,2.14), home (41.19,1.60)
-  ✓ Workflows             5 days, 3 signs/day, tz=CET
-
-  ✓ GitHub is up to date. Auto-signing will use these settings.
+woffux timing natural     # or relaxed, exact
+woffux timing custom      # set the four windows yourself
 ```
 
-### Workflows
+## Who signs: this Mac and/or GitHub
 
-| Workflow | Purpose |
-|---|---|
-| **Auto Sign** | Cron schedule — downloads binary, signs |
-| **Manual Sign** | Press `s` in the TUI anytime |
-| **Keepalive** | Prevents GitHub from auto-disabling workflows after 60 days |
+Something has to be awake at 08:30. woffux has two signers that cooperate:
+
+| | This Mac (local agent) | GitHub Actions |
+|---|---|---|
+| Works when | the Mac is awake | always, even with the laptop closed |
+| Punctuality | on the natural moment | GitHub timers often run late |
+| Needs | macOS | a free GitHub account and the [`gh`](https://cli.github.com) CLI |
+| Privacy | everything stays on your Mac | public fork (shows sign times); credentials as encrypted secrets |
+| Turn on/off | `woffux agent on/off` or `m` | `woffux auto on/off` or `a` |
+
+**Using both is safest.** The Mac signs first. The GitHub backup waits a few extra minutes and, seeing the sign already registered, does nothing. If the Mac was asleep, GitHub signs instead. Every scheduled sign can be retried for up to two hours if something failed.
+
+```mermaid
+flowchart LR
+  S[Your week + natural timing] --> M[This Mac<br/>signs at the moment]
+  S --> G[GitHub Actions<br/>backup, a few minutes later]
+  M --> W[(Woffu)]
+  G -- "already signed? skip" --> W
+  C[Woffu calendar<br/>holidays, vacation, telework] --> M
+  C --> G
+```
+
+GitHub setup is automatic: woffux forks this repo into your account, stores your credentials and locations as encrypted Actions secrets and keeps the workflow in sync. Like every fork of a public repo, the fork is public. Its workflow file shows your sign times, but never your credentials. After changing settings, `woffux sync` pushes them (the dashboard warns you when GitHub is out of date).
 
 ## Requests
 
-Create and cancel telework, vacation, and absence requests directly from the CLI:
-
 ```bash
-# Interactive — pick type and dates
-woffux request
-
-# One-liner
-woffux request -t "Teletrabajo🏡" -d 2026-03-20
-
-# Batch — multiple dates
-woffux request -t Vacaciones -d 2026-08-01,2026-08-02,2026-08-03,2026-08-04,2026-08-05
-
-# List your requests
-woffux requests
-
-# Cancel a request
+woffux request                                        # interactive
+woffux request -t Teletrabajo -d 2026-10-05,2026-10-07
+woffux requests                                       # list
 woffux request cancel 17117405
 ```
 
-## Telegram notifications
+Or use the calendar in the dashboard: select days, press `t` or `v`, confirm.
 
-Optional. Get a message on every sign:
+## Command reference
 
-```
-✅ Fichaje realizado correctamente
-📅 2026-03-17
-🏠 Teletrabajo
-```
-
-The setup wizard walks you through creating a bot with @BotFather and verifies the connection with a test message.
-
-## Configuration
-
-| What | Where |
+| Command | What it does |
 |---|---|
-| Config | `~/.woffux.yaml` |
-| Password | OS keychain (macOS Keychain / Linux keyring) |
-| GitHub secrets | Set automatically by `woffux setup` and `woffux sync` |
+| `woffux` | Dashboard (starts setup the first time) |
+| `woffux setup` | Guided setup; run again any time to review it |
+| `woffux status` / `today` | Today: working day, mode, signs |
+| `woffux sign` | Clock in/out now |
+| `woffux schedule` · `set` · `edit` · `save` · `load` · `list` · `delete` · `push` | Your week and presets |
+| `woffux timing [natural\|relaxed\|exact\|custom]` | Natural timing |
+| `woffux agent on\|off\|status` | Sign from this Mac |
+| `woffux auto on\|off` | GitHub backup signer |
+| `woffux sync` | Push settings to GitHub |
+| `woffux events` | Vacation days and hours left |
+| `woffux calendar` · `holidays` · `history` · `requests` | Query Woffu |
+| `woffux request` · `request cancel <id>` | Create / cancel requests |
+| `woffux config` · `config edit` | See / change any setting |
+| `woffux open [docs\|calendar\|github]` | Open in the browser |
+| `woffux update` | Update to the latest version |
 
-View with `woffux config`. Edit individual settings with `woffux config edit` — it explains when and why to sync after changes.
+Query commands print colours in a terminal, TSV when piped, and JSON with `--json`:
 
-### Environment variables (CI)
+```bash
+woffux events --json | jq '.[] | select(.name == "Vacaciones") | .available'
+woffux today --json | jq '.slots[-1].out // "still clocked in"'
+```
 
-Used by GitHub Actions. Set automatically by `woffux setup`.
+## FAQ
 
-| Variable | Required | Description |
-|---|---|---|
-| `WOFFU_URL` | Yes | `https://app.woffu.com/api` |
-| `WOFFU_COMPANY_URL` | Yes | `https://yourcompany.woffu.com` |
-| `WOFFU_EMAIL` | Yes | Woffu login email |
-| `WOFFU_PASSWORD` | Yes | Woffu password |
-| `WOFFU_LATITUDE` | Yes | Office latitude |
-| `WOFFU_LONGITUDE` | Yes | Office longitude |
-| `WOFFU_HOME_LATITUDE` | Yes | Home latitude |
-| `WOFFU_HOME_LONGITUDE` | Yes | Home longitude |
-| `TELEGRAM_BOT_TOKEN` | No | Telegram bot token |
-| `TELEGRAM_CHAT_ID` | No | Telegram chat ID |
+<details>
+<summary><strong>Will it sign on holidays or when I'm on vacation?</strong></summary>
 
-## Troubleshooting
+No. Before every automatic sign woffux asks Woffu whether today is a working day. Weekends, public holidays, approved absences and vacation are skipped. On telework days it signs with your home location.
+</details>
 
-| Problem | Solution |
+<details>
+<summary><strong>What if I sign by hand (phone, web)?</strong></summary>
+
+woffux notices. A scheduled sign that's already registered is skipped, and it never signs "the wrong way" (for example OUT when you just clocked IN yourself).
+</details>
+
+<details>
+<summary><strong>My Mac was asleep at 08:30.</strong></summary>
+
+If GitHub is on, it signs. Otherwise the Mac catches up when it wakes, for up to two hours after the scheduled time. The dashboard shows *clock-in pending* in the meantime, and you can press `s` to sign right away.
+</details>
+
+<details>
+<summary><strong><code>woffux update</code> says "GitHub API returned 403".</strong></summary>
+
+That's GitHub's limit on anonymous requests (60 per hour per IP, often shared in offices and VPNs). Since v5.10.1 woffux falls back to the public download page automatically. On older versions, re-run the installer.
+</details>
+
+<details>
+<summary><strong>Where is my data?</strong></summary>
+
+Settings in `~/.woffux.yaml`, your password in the system keychain (macOS Keychain / Linux keyring). If you use the GitHub backup, credentials and locations are stored as encrypted Actions secrets in your fork. The fork itself is public, so its workflow shows your sign times but no personal data. Nothing is sent anywhere else. Telegram notifications are optional.
+</details>
+
+<details>
+<summary><strong>How do I stop it or uninstall?</strong></summary>
+
+`woffux agent off` and `woffux auto off` stop all automatic signing. To remove everything: `woffux agent off`, delete `~/.woffux.yaml` and the binary (`/usr/local/bin/woffux`), and, if you used GitHub, your `woffux` repository.
+</details>
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
+
+| Problem | Fix |
 |---|---|
-| `woffux: command not found` | Binary not in PATH — `sudo mv woffux /usr/local/bin/` |
-| `config not found` | Run `woffux setup` |
-| `password not in keychain` | Run `woffux setup` to reconfigure |
-| Auth fails after password change | `woffux config edit` → Password → sync |
-| Auto-signing stopped | `woffux auto` to check. Keepalive prevents 60-day disable |
-| Wrong coordinates | `woffux config edit` → Office/Home → sync |
-| Telegram not working | `woffux config edit` → Telegram → sync |
-| Changes not taking effect | Run `woffux sync` — local config must be pushed to GitHub |
-| `gh` not installed | Setup wizard guides you through installation |
-| Multiple GitHub accounts | `gh auth switch` to the right account, then `woffux sync` |
+| Login fails after changing your Woffu password | `woffux config edit` → Password, then `woffux sync` |
+| Signs from the wrong place | `woffux config edit` → Office / Home, then `woffux sync` |
+| GitHub stopped signing | `woffux auto` to check; the Keepalive workflow prevents GitHub's 60-day pause |
+| Dashboard says GitHub is outdated | `woffux sync` |
+| `gh` missing or wrong account | `brew install gh`, `gh auth login` / `gh auth switch`, then `woffux sync` |
+| Check what the Mac did | `woffux agent status` (recent activity) |
+</details>
+
+## Install options
+
+<details>
+<summary><strong>Download a binary</strong></summary>
+
+From [Releases](https://github.com/ngavilan-dogfy/woffux/releases/latest): `woffux-darwin-arm64` (Apple Silicon), `woffux-darwin-amd64` (Intel Mac), `woffux-linux-amd64`, `woffux-linux-arm64`.
+
+```bash
+chmod +x woffux-darwin-arm64 && sudo mv woffux-darwin-arm64 /usr/local/bin/woffux
+```
+</details>
+
+<details>
+<summary><strong>Build from source (Go 1.25+)</strong></summary>
+
+```bash
+go install github.com/ngavilan-dogfy/woffux/cmd/woffux@latest
+```
+</details>
+
+For the GitHub backup you also need [git](https://git-scm.com) and the [GitHub CLI](https://cli.github.com) (`brew install git gh`, then `gh auth login`). Setup checks for them and explains what's missing.
+
+## Contributing
+
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test and preview the dashboard without a Woffu account. Releases are cut automatically from Conventional Commits on `main`.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). woffux is an independent project, not affiliated with Woffu.

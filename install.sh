@@ -38,7 +38,12 @@ BINARY="woffux-${OS}-${ARCH}"
 
 # Get latest release
 printf "  ${DIM}Finding latest release...${NC}\n"
-TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+# Resolve the tag from the public redirect (no API rate limit), falling
+# back to the API.
+TAG=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p')
+if [ -z "$TAG" ]; then
+  TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+fi
 
 if [ -z "$TAG" ]; then
   printf "  ${RED}✗${NC} Could not find latest release.\n"
@@ -87,5 +92,5 @@ printf "\n"
 printf "  ${GREEN}✓${NC} ${BOLD}woffux ${TAG}${NC} installed\n"
 printf "  ${DIM}${INSTALL_DIR}/woffux${NC}\n"
 printf "\n"
-printf "  Next: ${BOLD}woffux setup${NC}\n"
+printf "  Next: run ${BOLD}woffux${NC} — a short guided setup starts the first time.\n"
 printf "\n"

@@ -1,0 +1,15 @@
+name: Idea or improvement
+description: Something that would make woffux easier or nicer
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution — e.g. "I work four days a week in August"
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could woffux help?
