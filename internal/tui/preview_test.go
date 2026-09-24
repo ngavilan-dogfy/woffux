@@ -18,6 +18,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -79,8 +80,8 @@ func previewDashboard(hhmm string, slots []woffu.SignSlot) *Dashboard {
 	d := NewDashboard(nil, nil, cfg, "")
 	d.now = func() time.Time { return now }
 	d.loading = false
-	d.width, d.height = 120, 38
-	d.profile = &woffu.UserProfile{FullName: "NAHUEL GAVILAN BERNAL"}
+	d.width, d.height = 120, 33
+	d.profile = &woffu.UserProfile{FullName: "ALEX GARCIA"}
 	d.signInfo = &woffu.SignInfo{Date: "2026-09-23", Mode: woffu.SignModeOffice, IsWorkingDay: true,
 		NextEvents: []woffu.SignEvent{
 			{Date: "2026-09-24", Names: []string{"Mare de Déu de la Mercè"}},
@@ -103,6 +104,7 @@ func previewDashboard(hhmm string, slots []woffu.SignSlot) *Dashboard {
 	d.autoActive = &off
 	d.autoInSync = &inSync
 	d.fetchedAt = now
+	d.cfg.Timing = timing.Settings{InEarly: 6, InLate: 1, OutLate: 8, Seed: "preview"}
 	d.cal = newCalendarGrid(2026, time.September, now)
 	d.cal.setDays(days)
 	return d

@@ -15,6 +15,7 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	gh "github.com/ngavilan-dogfy/woffux/internal/github"
 	"github.com/ngavilan-dogfy/woffux/internal/notify"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -490,4 +491,31 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
+}
+
+// applyTiming switches the natural-timing preset, saves it and, when a
+// GitHub fork exists, pushes it so the fallback signs at the same moments.
+func (d *Dashboard) applyTiming(key string) tea.Cmd {
+	var preset timing.Preset
+	for _, p := range timing.Presets {
+		if p.Key == key {
+			preset = p
+		}
+	}
+	if preset.Key == "" {
+		return nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return d.showToast("Couldn't load settings: "+err.Error(), toastErr)
+	}
+	cfg.Timing = cfg.Timing.WithPreset(preset)
+	if err := config.Save(cfg); err != nil {
+		return d.showToast("Couldn't save settings: "+err.Error(), toastErr)
+	}
+	d.applyConfig(cfg)
+	if d.hasFork() {
+		return tea.Batch(d.showToast("Timing: "+preset.Name+" — updating GitHub…", toastOK), d.syncGitHub())
+	}
+	return d.showToast("Timing: "+preset.Name+" · "+cfg.Timing.Describe(), toastOK)
 }

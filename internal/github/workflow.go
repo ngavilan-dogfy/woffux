@@ -306,8 +306,19 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 	if len(opts) > 0 && opts[0] > 0 {
 		randomDelay = opts[0]
 	}
+	return generateWorkflowYAML(schedule, nil, nil, tz, randomDelay)
+}
+
+func generateWorkflowYAML(schedule config.Schedule, extra []config.Schedule, seasonFlags []string, tz string, randomDelay int) string {
+	if randomDelay <= 0 {
+		randomDelay = 90
+	}
 	crons := GenerateCrons(schedule, tz)
 	catchUpCrons := GenerateCatchUpCrons(schedule, tz, catchUpWindowMinutes)
+	for _, s := range extra {
+		crons = uniqueCrons(crons, GenerateCrons(s, tz))
+		catchUpCrons = uniqueCrons(catchUpCrons, GenerateCatchUpCrons(s, tz, catchUpWindowMinutes))
+	}
 
 	var cronLines []string
 	for _, c := range crons {
@@ -329,14 +340,18 @@ func GenerateWorkflowYAML(schedule config.Schedule, tz string, opts ...int) stri
 
 	spec := CatchUpSpec(schedule)
 	signBlock := `if [ "${{ github.event_name }}" = "schedule" ]; then
-            ./woffux sign --catch-up '%s' --catch-up-timezone '%s' --catch-up-window '2h'
+            ./woffux sign --catch-up '%s' --catch-up-timezone '%s' --catch-up-window '2h'%s
           else
             ./woffux sign
           fi`
 	if spec == "" {
 		signBlock = `./woffux sign`
 	} else {
-		signBlock = fmt.Sprintf(signBlock, spec, ianaZone)
+		var seasons strings.Builder
+		for _, f := range seasonFlags {
+			seasons.WriteString(" --season '" + f + "'")
+		}
+		signBlock = fmt.Sprintf(signBlock, spec, ianaZone, seasons.String())
 	}
 
 	return fmt.Sprintf(`name: Auto Sign
@@ -376,6 +391,8 @@ jobs:
           WOFFU_HOME_LONGITUDE: ${{ secrets.WOFFU_HOME_LONGITUDE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WOFFUX_TIMING: ${{ secrets.WOFFUX_TIMING }}
+          WOFFUX_SIGNER: github
 
       - name: Notify failure
         if: failure()
@@ -604,4 +621,62 @@ func containsString(values []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// seasonalSchedules splits a config into the base schedule and one schedule
+// per seasonal period, so the GitHub fallback follows the same date rules
+// as the local agent instead of a schedule frozen at sync time.
+func seasonalSchedules(cfg *config.Config) (config.Schedule, []seasonSpec) {
+	base := cfg.Schedule
+	if len(cfg.Seasons.Periods) == 0 {
+		return base, nil
+	}
+	if s, ok := cfg.SavedSchedules[cfg.Seasons.Default]; ok {
+		base = s
+	}
+	var out []seasonSpec
+	for _, p := range cfg.Seasons.Periods {
+		if s, ok := cfg.SavedSchedules[p.Preset]; ok {
+			out = append(out, seasonSpec{from: p.From, to: p.To, schedule: s})
+		}
+	}
+	return base, out
+}
+
+type seasonSpec struct {
+	from, to string
+	schedule config.Schedule
+}
+
+// SeasonFlag renders one --season value: "MM-DD..MM-DD=<catch-up spec>".
+func (s seasonSpec) flag() string {
+	return s.from + ".." + s.to + "=" + CatchUpSpec(s.schedule)
+}
+
+// GenerateWorkflowYAMLForConfig is GenerateWorkflowYAML with seasonal
+// schedules baked in.
+func GenerateWorkflowYAMLForConfig(cfg *config.Config) string {
+	base, seasons := seasonalSchedules(cfg)
+	extra := make([]config.Schedule, 0, len(seasons))
+	flags := make([]string, 0, len(seasons))
+	for _, s := range seasons {
+		extra = append(extra, s.schedule)
+		flags = append(flags, s.flag())
+	}
+	return generateWorkflowYAML(base, extra, flags, cfg.Timezone, cfg.GetRandomDelaySecs())
+}
+
+// uniqueCrons merges cron lists, keeping the first of each expression.
+func uniqueCrons(lists ...[]CronEntry) []CronEntry {
+	seen := map[string]bool{}
+	var out []CronEntry
+	for _, l := range lists {
+		for _, c := range l {
+			if !seen[c.Cron] {
+				seen[c.Cron] = true
+				out = append(out, c)
+			}
+		}
+	}
+	return out
 }

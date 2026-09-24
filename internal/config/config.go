@@ -1,7 +1,10 @@
 package config
 
 import (
+	"time"
+
 	"fmt"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"os"
 	"path/filepath"
 	"sort"
@@ -48,6 +51,10 @@ type Config struct {
 	ActiveSchedule  string              `yaml:"active_schedule,omitempty"`
 	Telegram        TelegramConfig      `yaml:"telegram,omitempty"`
 	RandomDelaySecs int                 `yaml:"random_delay_secs,omitempty"` // Max random delay before signing (default: 90)
+	// Timing moves each sign to a natural moment around its scheduled time.
+	Timing timing.Settings `yaml:"timing,omitempty"`
+	// Seasons switch schedule presets by date (e.g. summer hours).
+	Seasons Seasons `yaml:"seasons,omitempty"`
 }
 
 // GetRandomDelaySecs returns the configured random delay or the default (90s).
@@ -196,6 +203,9 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 	cfg.Normalize()
+	// Seasonal schedules apply on read, so every command sees today's
+	// schedule; whoever saves next persists the switch.
+	cfg.ApplySeasons(time.Now())
 
 	return &cfg, nil
 }
@@ -245,6 +255,7 @@ func LoadOrEnv() (*Config, string, error) {
 			BotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 			ChatID:   os.Getenv("TELEGRAM_CHAT_ID"),
 		},
+		Timing: envTiming(),
 	}, password, nil
 }
 
@@ -265,4 +276,14 @@ func Save(cfg *Config) error {
 	}
 
 	return nil
+}
+
+// envTiming reads natural-timing settings from WOFFUX_TIMING (CI). A bad
+// value falls back to exact timing rather than failing the sign.
+func envTiming() timing.Settings {
+	t, err := timing.Decode(os.Getenv("WOFFUX_TIMING"))
+	if err != nil {
+		return timing.Settings{}
+	}
+	return t
 }

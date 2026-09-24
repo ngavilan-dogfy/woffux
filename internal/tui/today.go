@@ -7,7 +7,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/ngavilan-dogfy/woffux/internal/agent"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -199,11 +198,15 @@ func (d *Dashboard) renderNext(p dayPlan, w int) string {
 	}
 
 	var who string
+	moment := ""
+	if !p.nextAt.IsZero() {
+		moment = " at " + p.nextAt.Format("15:04")
+	}
 	switch {
 	case d.agentOn():
-		who = sOK.Render("●") + sSubtle.Render(" This Mac ≈"+clockOf(expectedAgentRun(p.next.minute)))
+		who = sOK.Render("●") + sSubtle.Render(" This Mac"+moment)
 	case d.githubOn():
-		who = sWarn.Render("●") + sSubtle.Render(" GitHub (can run late)")
+		who = sWarn.Render("●") + sSubtle.Render(" GitHub"+moment+" (can run late)")
 	case d.agentActive == nil && d.autoActive == nil:
 		who = sFaint.Render("checking autopilot…")
 	default:
@@ -462,7 +465,7 @@ func (d *Dashboard) renderAutopilot(p dayPlan, w int) string {
 		case d.agentActive == nil:
 			row(sFaint.Render("○"), "This Mac", sFaint.Render("checking…"))
 		case *d.agentActive:
-			row(sOK.Render("●"), "This Mac", sSubtle.Render("signs at "+agent.MinutesLabel()))
+			row(sOK.Render("●"), "This Mac", sSubtle.Render("signs on time while awake"))
 		default:
 			row(sFaint.Render("○"), "This Mac", sFaint.Render("off · ")+sKey.Render("m")+sFaint.Render(" to enable"))
 		}
@@ -490,6 +493,13 @@ func (d *Dashboard) renderAutopilot(p dayPlan, w int) string {
 			}
 		}
 		row(sOK.Render("●"), "GitHub", st.Render(detail))
+	}
+
+	// Timing
+	if d.cfg.Timing.Active() {
+		row(sBrand.Render("◇"), "Timing", sText.Render("natural")+sFaint.Render(" · "+d.cfg.Timing.Short()))
+	} else {
+		row(sFaint.Render("◇"), "Timing", sFaint.Render("exact minute · ")+sKey.Render("⏎")+sFaint.Render(" Natural timing"))
 	}
 
 	// Schedule
