@@ -11,6 +11,7 @@ permissions:
 jobs:
   test:
     name: Build, vet and test
+    if: github.repository == 'ngavilan-dogfy/woffux'  # not in personal forks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

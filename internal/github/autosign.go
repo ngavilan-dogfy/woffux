@@ -140,6 +140,14 @@ func ReloadAutoSign(repo string) error {
 		return err
 	}
 
+	// Keepalive is what stops GitHub pausing Auto Sign after 60 quiet
+	// days; make sure it's on too (enabling is idempotent).
+	for _, w := range workflows {
+		if strings.Contains(w.Name, "Keepalive") && w.State != "active" {
+			_ = ghRunWithToken(token, "api", "-X", "PUT",
+				fmt.Sprintf("repos/%s/actions/workflows/%d/enable", repo, w.ID))
+		}
+	}
 	for _, w := range workflows {
 		if w.Name == autoSignWorkflowName {
 			// Disable

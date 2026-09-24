@@ -365,3 +365,15 @@ func TestWorkflowBakesSeasons(t *testing.T) {
 		t.Errorf("crons should cover both schedules:\n%s", y)
 	}
 }
+
+// GitHub pauses scheduled workflows after 60 days without activity; the
+// keepalive must fire well inside that window.
+func TestKeepaliveRunsMonthly(t *testing.T) {
+	y := GenerateKeepaliveWorkflowYAML()
+	if !strings.Contains(y, "cron: '0 12 1 * *'") {
+		t.Fatalf("keepalive must run monthly:\n%s", y)
+	}
+	if !strings.Contains(y, "workflow_dispatch") {
+		t.Fatal("keepalive should be runnable by hand")
+	}
+}

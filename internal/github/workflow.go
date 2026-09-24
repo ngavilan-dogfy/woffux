@@ -451,7 +451,10 @@ func GenerateKeepaliveWorkflowYAML() string {
 
 on:
   schedule:
-    - cron: '0 12 1 */2 *'
+    # Monthly: GitHub pauses scheduled workflows after 60 days without
+    # repository activity, so every other month was cutting it too close.
+    - cron: '0 12 1 * *'
+  workflow_dispatch:
 
 jobs:
   keepalive:

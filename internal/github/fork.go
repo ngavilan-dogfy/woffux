@@ -285,7 +285,21 @@ func CheckWorkflowSync(repo string, cfg *config.Config) (bool, error) {
 	}
 
 	expected := GenerateWorkflowYAMLForConfig(cfg)
-	return strings.TrimSpace(string(remoteContent)) == strings.TrimSpace(expected), nil
+	if strings.TrimSpace(string(remoteContent)) != strings.TrimSpace(expected) {
+		return false, nil
+	}
+	// The keepalive workflow matters as much: an outdated one lets GitHub
+	// pause signing after 60 quiet days.
+	ka, err := ghOutputWithToken(token, "api",
+		fmt.Sprintf("repos/%s/contents/.github/workflows/keepalive.yml", repo), "--jq", ".content")
+	if err != nil {
+		return false, nil
+	}
+	kaContent, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(strings.TrimSpace(ka), "\n", ""))
+	if err != nil {
+		return false, nil
+	}
+	return strings.TrimSpace(string(kaContent)) == strings.TrimSpace(GenerateKeepaliveWorkflowYAML()), nil
 }
 
 func enableActions(repo, token string) {
