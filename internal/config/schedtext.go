@@ -353,3 +353,76 @@ func (c *Config) NextSeasonChange(from time.Time) (time.Time, string, bool) {
 	}
 	return time.Time{}, "", false
 }
+
+// RenamePreset renames a preset everywhere it's referenced (active
+// schedule and seasons).
+func (c *Config) RenamePreset(from, to string) error {
+	from, to = NormalizePresetName(from), NormalizePresetName(to)
+	if to == "" {
+		return fmt.Errorf("give it a name")
+	}
+	s, ok := c.SavedSchedules[from]
+	if !ok {
+		return fmt.Errorf("no preset called %q", from)
+	}
+	if _, exists := c.SavedSchedules[to]; exists && to != from {
+		return fmt.Errorf("%q already exists", to)
+	}
+	delete(c.SavedSchedules, from)
+	c.SavedSchedules[to] = s
+	if c.ActiveSchedule == from {
+		c.ActiveSchedule = to
+	}
+	if c.Seasons.Default == from {
+		c.Seasons.Default = to
+	}
+	for i := range c.Seasons.Periods {
+		if c.Seasons.Periods[i].Preset == from {
+			c.Seasons.Periods[i].Preset = to
+		}
+	}
+	return nil
+}
+
+// PresetInSeasons reports whether seasons reference the preset.
+func (c *Config) PresetInSeasons(name string) bool {
+	if c.Seasons.Default == name && len(c.Seasons.Periods) > 0 {
+		return true
+	}
+	for _, p := range c.Seasons.Periods {
+		if p.Preset == name {
+			return true
+		}
+	}
+	return false
+}
+
+// UsePreset makes a preset the current schedule. With seasons on, it
+// replaces the preset of whatever season today falls in, so the choice
+// sticks instead of being switched back on the next read. It returns a
+// short description of the scope ("rest of the year", "until 31 Aug").
+func (c *Config) UsePreset(name string, today time.Time) (string, error) {
+	name = NormalizePresetName(name)
+	if _, ok := c.SavedSchedules[name]; !ok {
+		return "", fmt.Errorf("no preset called %q", name)
+	}
+	scope := ""
+	if len(c.Seasons.Periods) > 0 {
+		inPeriod := false
+		for i, p := range c.Seasons.Periods {
+			if p.contains(today) {
+				c.Seasons.Periods[i].Preset = name
+				to, _ := time.Parse("01-02", p.To)
+				scope = "until " + to.Format("2 Jan")
+				inPeriod = true
+				break
+			}
+		}
+		if !inPeriod {
+			c.Seasons.Default = name
+			scope = "outside the seasonal dates"
+		}
+	}
+	c.LoadSchedulePreset(name)
+	return scope, nil
+}

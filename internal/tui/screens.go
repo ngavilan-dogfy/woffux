@@ -292,6 +292,12 @@ func (d *Dashboard) renderOverlay(h int) string {
 		return d.renderInput()
 	case overlayHelp:
 		return d.renderHelp()
+	case overlayEditor:
+		return d.renderEditor()
+	case overlayMenu:
+		return d.renderMenu(h)
+	case overlayDates:
+		return d.renderDates()
 	}
 	return ""
 }
@@ -483,7 +489,7 @@ func (d *Dashboard) renderHelp() string {
 	}
 	everywhere := group("Everywhere", [][2]string{
 		{"⏎  :  ctrl+k", "all actions"},
-		{"1 2 3  tab", "switch screen"},
+		{"1 2 3 4  tab", "switch screen"},
 		{"s", "clock in / out"},
 		{"r", "refresh"},
 		{"o / g", "open Woffu / GitHub"},
@@ -493,7 +499,8 @@ func (d *Dashboard) renderHelp() string {
 	autopilot := group("Autopilot", [][2]string{
 		{"m", "sign from this Mac"},
 		{"a", "GitHub backup signer"},
-		{"e", "edit schedule"},
+		{"e", "edit your week"},
+		{"U", "update woffux"},
 	})
 	calendar := group("Calendar", [][2]string{
 		{"←↑↓→ hjkl", "move"},
@@ -506,7 +513,13 @@ func (d *Dashboard) renderHelp() string {
 		{"esc", "clear selection"},
 		{"⏎", "all day actions"},
 	})
-	left := everywhere + "\n\n" + autopilot
+	schedule := group("Schedules", [][2]string{
+		{"⏎", "use the selected one"},
+		{"e / n / c", "edit · new · copy"},
+		{"R / x", "rename · delete"},
+		{"S / t", "summer hours · timing"},
+	})
+	left := everywhere + "\n\n" + autopilot + "\n\n" + schedule
 	w := min(92, d.width-6)
 	var body string
 	if w >= 90 {

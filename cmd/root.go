@@ -152,6 +152,11 @@ func runDashboard() error {
 	client := woffu.NewWoffuClient(cfg.WoffuURL)
 	companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
 
+	tui.AppVersion = Version
+	tui.CheckLatest = func() (string, error) {
+		rel, err := fetchLatestReleaseFromWeb(releasesWeb)
+		return rel.TagName, err
+	}
 	model := tui.NewDashboard(client, companyClient, cfg, password)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

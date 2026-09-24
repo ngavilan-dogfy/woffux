@@ -104,3 +104,39 @@ func TestNormalizeSeasonDate(t *testing.T) {
 		t.Error("32/1 must fail")
 	}
 }
+
+func TestRenamePresetUpdatesReferences(t *testing.T) {
+	s, _ := ParseScheduleText("mon-fri 9-17")
+	cfg := &Config{ActiveSchedule: "a", SavedSchedules: map[string]Schedule{"a": s, "b": s},
+		Seasons: Seasons{Default: "a", Periods: []Season{{Preset: "b", From: "07-01", To: "08-31"}}}}
+	if err := cfg.RenamePreset("b", "summer"); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Seasons.Periods[0].Preset != "summer" || cfg.SavedSchedules["summer"].Monday.Times == nil {
+		t.Fatal("season reference not renamed")
+	}
+	if err := cfg.RenamePreset("a", "summer"); err == nil {
+		t.Fatal("renaming onto an existing preset must fail")
+	}
+}
+
+func TestUsePresetSticksWithSeasons(t *testing.T) {
+	a, _ := ParseScheduleText("mon-fri 9-17")
+	b, _ := ParseScheduleText("mon-fri 8-15")
+	c, _ := ParseScheduleText("mon-fri 10-18")
+	cfg := &Config{Schedule: a, ActiveSchedule: "a", SavedSchedules: map[string]Schedule{"a": a, "b": b, "c": c},
+		Seasons: Seasons{Default: "a", Periods: []Season{{Preset: "b", From: "07-01", To: "08-31"}}}}
+	sept := time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)
+	if _, err := cfg.UsePreset("c", sept); err != nil {
+		t.Fatal(err)
+	}
+	cfg.ApplySeasons(sept)
+	if cfg.ActiveSchedule != "c" {
+		t.Fatalf("choice was reverted by seasons: %s", cfg.ActiveSchedule)
+	}
+	july := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC)
+	cfg.ApplySeasons(july)
+	if cfg.ActiveSchedule != "b" {
+		t.Fatal("summer should still switch to its own preset")
+	}
+}

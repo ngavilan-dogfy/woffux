@@ -28,6 +28,18 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return d, d.keyPalette(msg)
 	case overlayDay:
 		return d, d.keyDayMenu(key)
+	case overlayEditor:
+		return d, d.keyEditor(msg)
+	case overlayMenu:
+		return d, d.keyMenu(key)
+	case overlayDates:
+		return d, d.keyDates(msg)
+	}
+
+	if d.activeTab == tabSchedule {
+		if cmd, handled := d.keySchedule(key); handled {
+			return d, cmd
+		}
 	}
 
 	if d.activeTab == tabCalendar && d.cal != nil {
@@ -48,6 +60,8 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "2":
 		d.switchTab(tabCalendar)
 	case "3":
+		d.switchTab(tabSchedule)
+	case "4":
 		d.switchTab(tabBalance)
 	case "enter", ":", "ctrl+k", "/":
 		d.openPalette()
@@ -69,7 +83,14 @@ func (d *Dashboard) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "m":
 		return d, d.runAction("toggle-agent")
 	case "e":
-		return d, d.execWoffux("Schedule", "schedule", "edit")
+		d.switchTab(tabSchedule)
+		d.selectActive()
+		return d, d.schedEdit()
+	case "U":
+		if d.latest == "" {
+			return d, d.showToast("You're on the latest version ("+AppVersion+")", toastInfo)
+		}
+		return d, d.runUpdate()
 	}
 	return d, nil
 }
@@ -341,3 +362,13 @@ func agentAvailable() bool { return agent.Supported() }
 
 // hasFork reports whether a GitHub fork is configured.
 func (d *Dashboard) hasFork() bool { return strings.TrimSpace(d.cfg.GithubFork) != "" }
+
+// selectActive points the schedule list at the schedule in use.
+func (d *Dashboard) selectActive() {
+	for i, r := range d.schedRows() {
+		if (r.current) || (r.name != "" && r.name == d.cfg.ActiveSchedule) {
+			d.schedCursor = i
+			return
+		}
+	}
+}

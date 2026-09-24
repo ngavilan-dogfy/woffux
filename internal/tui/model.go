@@ -14,16 +14,26 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
+// AppVersion and CheckLatest are set by the CLI so the dashboard can offer
+// updates without importing the command package.
+var (
+	AppVersion  = "dev"
+	CheckLatest func() (string, error)
+)
+
+type latestVersionMsg struct{ tag string }
+
 // ── Tabs ──
 
 const (
 	tabToday = iota
 	tabCalendar
+	tabSchedule
 	tabBalance
 	tabCount
 )
 
-var tabNames = [tabCount]string{"Today", "Calendar", "Balance"}
+var tabNames = [tabCount]string{"Today", "Calendar", "Schedule", "Balance"}
 
 // ── Messages ──
 
@@ -103,6 +113,9 @@ const (
 	overlayConfirm             // "are you sure" for anything irreversible
 	overlayInput               // save-as-preset name
 	overlayHelp                // keyboard reference
+	overlayEditor              // schedule editor
+	overlayMenu                // generic menu (templates, timing, seasons)
+	overlayDates               // summer dates
 )
 
 // confirmSpec describes a pending confirmation.
@@ -177,6 +190,14 @@ type Dashboard struct {
 
 	width, height int
 
+	latest string // newer version available, "" when up to date/unknown
+
+	// Schedule tab
+	schedCursor int
+	editor      *schedEditor
+	menu        *menuSpec
+	datesPreset string
+
 	// now is overridable for tests and previews.
 	now func() time.Time
 }
@@ -234,7 +255,7 @@ func (d *Dashboard) reloadConfig() {
 }
 
 func (d *Dashboard) Init() tea.Cmd {
-	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.fetchAgentStatus(), d.tick(), d.spin.Tick)
+	return tea.Batch(d.fetchData(), d.fetchAutoStatus(), d.fetchAgentStatus(), d.tick(), d.spin.Tick, d.checkLatest())
 }
 
 // ── Update ──
@@ -385,6 +406,10 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return d, d.showToast(fmt.Sprintf("Saved schedule as %q", msg.name), toastOK)
 
 	case execDoneMsg:
+		if msg.label == "woffux" && msg.err == nil {
+			// The binary was just replaced: quit so the next launch runs it.
+			return d, tea.Sequence(d.showToast("Updated — reopen woffux to use the new version", toastOK), tea.Quit)
+		}
 		if msg.err != nil {
 			return d, d.showToast(msg.label+" not changed", toastInfo)
 		}
@@ -406,6 +431,12 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.id == d.toast.id {
 			d.toast = toast{id: d.toast.id}
 		}
+
+	case configSavedMsg:
+		return d, d.onConfigSaved(msg)
+
+	case latestVersionMsg:
+		d.latest = msg.tag
 
 	case tickMsg:
 		d.ticks++
@@ -509,4 +540,37 @@ func (d *Dashboard) pendingSignAction() string {
 		return "OUT"
 	}
 	return "IN"
+}
+
+// checkLatest looks for a newer release in the background.
+func (d *Dashboard) checkLatest() tea.Cmd {
+	if CheckLatest == nil || AppVersion == "dev" {
+		return nil
+	}
+	return func() tea.Msg {
+		tag, err := CheckLatest()
+		if err != nil || !versionNewer(tag, AppVersion) {
+			return nil
+		}
+		return latestVersionMsg{tag: tag}
+	}
+}
+
+func versionNewer(a, b string) bool {
+	parse := func(v string) (p [3]int) {
+		fmt.Sscanf(strings.TrimPrefix(strings.TrimSpace(v), "v"), "%d.%d.%d", &p[0], &p[1], &p[2])
+		return
+	}
+	pa, pb := parse(a), parse(b)
+	for i := 0; i < 3; i++ {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return false
+}
+
+// runUpdate suspends the dashboard and runs the updater.
+func (d *Dashboard) runUpdate() tea.Cmd {
+	return d.execWoffux("woffux", "update")
 }

@@ -169,3 +169,28 @@ func RecentLog(n int) []string {
 	}
 	return lines
 }
+
+// InstalledBinary returns the woffux binary the installed agent runs
+// ("" when not installed or unreadable).
+func InstalledBinary() string {
+	path, err := PlistPath()
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	s := string(data)
+	i := strings.Index(s, "<key>ProgramArguments</key>")
+	if i < 0 {
+		return ""
+	}
+	rest := s[i:]
+	a := strings.Index(rest, "<string>")
+	b := strings.Index(rest, "</string>")
+	if a < 0 || b < a {
+		return ""
+	}
+	return strings.TrimSpace(rest[a+len("<string>") : b])
+}
