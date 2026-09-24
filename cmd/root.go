@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/charmbracelet/huh"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,20 +58,7 @@ Output modes (on most commands):
   --plain                    TSV for awk/grep/cut
   (auto-detects piped output → TSV)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, password, err := loadConfigOrSetup()
-		if err != nil {
-			return err
-		}
-
-		client := woffu.NewWoffuClient(cfg.WoffuURL)
-		companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
-
-		model := tui.NewDashboard(client, companyClient, cfg, password)
-		p := tea.NewProgram(model, tea.WithAltScreen())
-		if _, err := p.Run(); err != nil {
-			return err
-		}
-		return nil
+		return runDashboard()
 	},
 }
 
@@ -106,6 +94,21 @@ func loadConfigOrSetup() (*config.Config, string, error) {
 	hint := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
 	cfg, err := config.Load()
+	if err != nil && isTTY() {
+		// First run: don't send people off to read docs — start setup.
+		start := true
+		fmt.Println()
+		if ferr := newForm(huh.NewGroup(huh.NewConfirm().
+			Title("woffux isn't set up yet").
+			Description("Setup takes about three minutes and signs nothing.").
+			Affirmative("Set it up now").Negative("Not now").Value(&start))).Run(); ferr == nil && start {
+			setupOpensDashboard = false // we open it right after
+			if serr := runSetup(nil, nil); serr != nil {
+				return nil, "", serr
+			}
+			cfg, err = config.Load()
+		}
+	}
 	if err != nil {
 		fmt.Println()
 		fmt.Printf("  %s No config found. Run %s to get started.\n\n",
@@ -137,4 +140,22 @@ func loadConfigOrSetup() (*config.Config, string, error) {
 	}
 
 	return cfg, password, nil
+}
+
+// runDashboard opens the interactive TUI (running setup first if needed).
+func runDashboard() error {
+	cfg, password, err := loadConfigOrSetup()
+	if err != nil {
+		return err
+	}
+
+	client := woffu.NewWoffuClient(cfg.WoffuURL)
+	companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
+
+	model := tui.NewDashboard(client, companyClient, cfg, password)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+	return nil
 }

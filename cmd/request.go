@@ -90,7 +90,7 @@ Examples:
 		} else {
 			// Interactive: enter dates
 			var datesInput string
-			err = huh.NewForm(
+			err = newForm(
 				huh.NewGroup(
 					huh.NewInput().
 						Title("Dates").
@@ -168,7 +168,7 @@ Find the ID with:  woffux requests
 		}
 
 		var confirm bool
-		if err := huh.NewForm(
+		if err := newForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title(fmt.Sprintf("Cancel request #%d?", requestId)).
@@ -262,7 +262,7 @@ func pickRequestType(types []woffu.RequestType) (*woffu.RequestType, error) {
 	allOptions := append(commonOptions, otherOptions...)
 
 	var selected int
-	err := huh.NewForm(
+	err := newForm(
 		huh.NewGroup(
 			huh.NewSelect[int]().
 				Title("Request type").

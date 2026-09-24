@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 )
@@ -119,5 +120,48 @@ func TestApplyScheduleWizardResultKeepsSelectedPresetActive(t *testing.T) {
 	}
 	if cfg.ActiveSchedule != "standard" {
 		t.Fatalf("active schedule = %q, want standard", cfg.ActiveSchedule)
+	}
+}
+
+func TestApplyScheduleWizardResultSummerReusesExistingPresets(t *testing.T) {
+	classic, _ := config.ParseScheduleText("mon-thu 8:30-13:30 14:15-17:30, fri 8-15")
+	sommer, _ := config.ParseScheduleText("mon-fri 8-15")
+	cfg := &config.Config{
+		Schedule:       classic,
+		ActiveSchedule: "classic",
+		SavedSchedules: map[string]config.Schedule{"classic": classic, "sommer": sommer},
+	}
+	err := applyScheduleWizardResult(cfg, scheduleWizardResult{
+		Schedule: classic, Summer: &sommer, SummerFrom: "07-01", SummerTo: "08-31",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.SavedSchedules) != 2 {
+		t.Fatalf("identical presets were duplicated: %v", cfg.SchedulePresetNames())
+	}
+	if cfg.Seasons.Default != "classic" || cfg.Seasons.Periods[0].Preset != "sommer" {
+		t.Fatalf("seasons = %+v", cfg.Seasons)
+	}
+}
+
+func TestNextAutomaticSignSkipsWeekend(t *testing.T) {
+	s, _ := config.ParseScheduleText("mon-fri 9-17")
+	cfg := &config.Config{Schedule: s}
+	sat := time.Date(2026, 9, 26, 12, 0, 0, 0, time.Local)
+	when, dir, ok := nextAutomaticSign(cfg, sat)
+	if !ok || dir != "IN" || when.Format("Mon 15:04") != "Mon 09:00" {
+		t.Fatalf("next sign = %v %s %v", when, dir, ok)
+	}
+}
+
+func TestApplyScheduleWizardResultNoSummerClearsSeasons(t *testing.T) {
+	s, _ := config.ParseScheduleText("mon-fri 9-17")
+	cfg := &config.Config{Seasons: config.Seasons{Default: "a", Periods: []config.Season{{Preset: "b", From: "07-01", To: "08-31"}}}}
+	if err := applyScheduleWizardResult(cfg, scheduleWizardResult{Schedule: s, NoSeasons: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Seasons.Periods) != 0 {
+		t.Fatal("answering 'no summer hours' must remove the seasonal switch")
 	}
 }
