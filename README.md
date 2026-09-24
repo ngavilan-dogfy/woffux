@@ -23,7 +23,7 @@
 - Uses office or home GPS coordinates based on your work mode
 - **Create and cancel requests** (telework, vacation, absence) from the CLI
 - Sends **Telegram notifications** on every sign (optional)
-- **Interactive TUI dashboard** with tabs, overlays, and live sign status
+- **Interactive TUI** — today at a glance, calendar requests in one keystroke, command palette
 - Fully **scriptable** — `--json` and `--plain` output on all query commands
 
 ## Install
@@ -238,26 +238,39 @@ woffux requests --json | jq -r '.[] | select(.status == "pending") | .request_id
 woffux
 ```
 
-Multi-tab dashboard with live data:
+Three screens, each answering one question:
 
-- **Status** — today's sign info, sign slots (clocked in/out), schedule, auto-sign status
-- **Events** — available vacations, hours, personal days
-- **Calendar** — upcoming holidays and events
+- **Today** — *where do I stand?* Clocked in / on a break / done / holiday at a
+  glance, hours worked against today's target, what the next sign is and
+  **who will do it** (this Mac, GitHub, or you). A timeline shows plan vs.
+  reality so a missed sign stands out, next to this week's hours per day and
+  the autopilot's health.
+- **Calendar** — the month with every day's type (office, remote, time off,
+  holiday), pending requests and days you worked without signing. Select days
+  and request telework or vacation, or cancel requests, in one keystroke.
+- **Balance** — days and hours left, requests waiting for approval, upcoming
+  holidays.
 
-The sign confirmation shows whether you'll sign **IN** or **OUT** based on your current slot state.
-
-Keyboard shortcuts:
+Everything that talks to Woffu (signing, requests, cancellations) asks for
+confirmation first and says exactly what will be sent.
 
 | Key | Action |
 |---|---|
-| `Tab` / `1-3` | Switch tabs |
-| `s` | Sign (with confirmation) |
-| `a` | Toggle auto-sign (with confirmation) |
+| `Enter` / `:` / `Ctrl+K` | Command palette — every action, type to filter |
+| `Tab` / `1-3` | Switch screens |
+| `s` | Clock in/out (with confirmation) |
 | `r` | Refresh data |
-| `o` | Open Woffu in browser |
-| `g` | Open GitHub Actions |
-| `Enter` | Action menu (sign, auto-sign, sync, presets, open) |
+| `m` | Toggle signing from this Mac (local agent) |
+| `a` | Toggle the GitHub backup signer |
+| `e` | Edit schedule |
+| `o` / `g` | Open Woffu / GitHub Actions |
+| `?` | All shortcuts |
 | `q` | Quit |
+
+In the calendar: arrows or `hjkl` move, `[` `]` change month, `.` jumps to
+today, `space` selects a day, `Shift+arrows` selects a range, `t` `v` `p` `b`
+request telework / vacation / personal day / hours pool, `c` cancels requests
+and `Esc` clears the selection.
 
 ## Auto-signing
 
@@ -325,7 +338,7 @@ woffux schedule load winter
 woffux schedule delete old-schedule
 ```
 
-In the TUI, press `Enter` to open the action menu — saved presets appear for quick switching, and "Save as preset" lets you name and save the current schedule.
+In the TUI, open the command palette (`Enter`) and type the preset name to switch, or pick "Save schedule as…" to name the current one.
 
 ### Syncing
 
@@ -347,7 +360,7 @@ woffux sync
 | Workflow | Purpose |
 |---|---|
 | **Auto Sign** | Cron schedule — downloads binary, signs |
-| **Manual Sign** | Trigger from Actions tab anytime |
+| **Manual Sign** | Press `s` in the TUI anytime |
 | **Keepalive** | Prevents GitHub from auto-disabling workflows after 60 days |
 
 ## Requests

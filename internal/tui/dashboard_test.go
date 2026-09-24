@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,517 +11,533 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
-func keyMsg(key string) tea.KeyMsg {
-	if len(key) == 1 {
-		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
-	}
-	switch key {
+func key(k string) tea.KeyMsg {
+	switch k {
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
+	case "down":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "up":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
+	case "shift+right":
+		return tea.KeyMsg{Type: tea.KeyShiftRight}
+	case " ":
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")}
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 }
 
-func stripAnsi(s string) string {
-	return ansiRe.ReplaceAllString(s, "")
+func at(hhmm string) time.Time {
+	t, _ := time.ParseInLocation("2006-01-02 15:04", "2026-09-23 "+hhmm, time.Local)
+	return t
 }
 
-func TestGetActionsSortsPresetNames(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{
-			SavedSchedules: map[string]config.Schedule{
-				"zeta":  {},
-				"alpha": {},
-			},
-		},
-	}
+func workingInfo() *woffu.SignInfo {
+	return &woffu.SignInfo{Date: "2026-09-23", Mode: woffu.SignModeOffice, IsWorkingDay: true}
+}
 
-	actions := d.getActions()
-	var presetKeys []string
-	for _, action := range actions {
-		if len(action.key) > len("preset:") && action.key[:len("preset:")] == "preset:" {
-			presetKeys = append(presetKeys, action.key)
+// ── Day plan ──
+
+func TestDayPlanPhases(t *testing.T) {
+	sched := previewSchedule()
+	cases := []struct {
+		name  string
+		now   string
+		slots []woffu.SignSlot
+		want  phase
+	}{
+		{"before first sign", "07:50", nil, phaseBefore},
+		{"late for first sign", "09:10", nil, phaseLate},
+		{"clocked in", "11:00", slotsAt("08:31", ""), phaseWorking},
+		{"lunch break", "13:50", slotsAt("08:31", "13:31"), phaseBreak},
+		{"all done", "18:00", slotsAt("08:31", "13:31", "14:16", "17:31"), phaseDone},
+	}
+	for _, c := range cases {
+		p := buildDayPlan(at(c.now), workingInfo(), nil, sched, c.slots)
+		if p.phase != c.want {
+			t.Errorf("%s: phase = %v, want %v", c.name, p.phase, c.want)
 		}
 	}
+}
 
-	if len(presetKeys) != 2 || presetKeys[0] != "preset:alpha" || presetKeys[1] != "preset:zeta" {
-		t.Fatalf("unexpected preset action order: %#v", presetKeys)
+func TestDayPlanNextSign(t *testing.T) {
+	p := buildDayPlan(at("13:50"), workingInfo(), nil, previewSchedule(), slotsAt("08:31", "13:31"))
+	if p.next == nil || !p.next.in || clockOf(p.next.minute) != "14:15" || p.nextDue {
+		t.Fatalf("next = %+v due=%v, want IN 14:15 not due", p.next, p.nextDue)
+	}
+	if p.workedDur != 5*time.Hour {
+		t.Fatalf("worked = %v, want 5h", p.workedDur)
+	}
+	if p.targetDur != 8*time.Hour+15*time.Minute {
+		t.Fatalf("target = %v, want 8h15m", p.targetDur)
 	}
 }
 
-func TestGetActionsMarksCurrentPresetReadOnly(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{
-			ActiveSchedule:  "classic",
-			GithubFork:      "owner/woffux",
-			WoffuCompanyURL: "https://example.woffu.com",
-			SavedSchedules: map[string]config.Schedule{
-				"classic":   {},
-				"lunchtime": {},
-			},
-		},
+// A holiday must never announce a sign, even though the weekday schedule
+// has times (the old dashboard showed "Next IN 08:30" on holidays).
+func TestDayPlanHolidayHasNoNextSign(t *testing.T) {
+	cal := &woffu.CalendarDay{Date: "2026-09-23", Status: "holiday", EventNames: []string{"La Mercè", "La Mercè"}}
+	info := workingInfo()
+	info.IsWorkingDay = false
+	p := buildDayPlan(at("08:00"), info, cal, previewSchedule(), nil)
+	if p.kind != kindHoliday || p.phase != phaseOff || p.next != nil {
+		t.Fatalf("holiday plan = kind %v phase %v next %+v", p.kind, p.phase, p.next)
 	}
-	active := true
-	d.autoActive = &active
+	if p.reason != "La Mercè" {
+		t.Fatalf("reason = %q, want deduplicated name", p.reason)
+	}
+}
 
-	actions := d.getActions()
-	var current action
-	for _, a := range actions {
-		if a.key == "preset:classic" {
-			current = a
-			break
+func TestDayPlanApprovedVacationIsTimeOff(t *testing.T) {
+	cal := &woffu.CalendarDay{Date: "2026-09-23", Status: "working", Mode: "office",
+		Requests: []woffu.DayRequest{{RequestID: 1, EventName: "Vacaciones", Status: "approved"}}}
+	p := buildDayPlan(at("09:00"), workingInfo(), cal, previewSchedule(), nil)
+	if p.kind != kindTimeOff || p.phase != phaseOff {
+		t.Fatalf("kind %v phase %v, want time off", p.kind, p.phase)
+	}
+}
+
+func TestDayPlanApprovedTeleworkStillWorks(t *testing.T) {
+	cal := &woffu.CalendarDay{Date: "2026-09-23", Status: "working", Mode: "remote",
+		Requests: []woffu.DayRequest{{RequestID: 1, EventName: "Teletrabajo", Status: "approved"}}}
+	p := buildDayPlan(at("09:00"), workingInfo(), cal, previewSchedule(), nil)
+	if p.kind != kindWorking {
+		t.Fatalf("telework day classified as %v", p.kind)
+	}
+}
+
+// Regression: an open IN "in the future" (clock skew, test data) crashed the
+// old progress bar with a negative strings.Repeat count.
+func TestDayPlanNeverNegative(t *testing.T) {
+	p := buildDayPlan(at("07:00"), workingInfo(), nil, previewSchedule(), slotsAt("08:31", ""))
+	if p.workedDur < 0 || p.progress() < 0 {
+		t.Fatalf("negative worked time: %v", p.workedDur)
+	}
+	_ = progressBar(-1, 10, cOK)
+	_ = progressBar(3, 10, cOK)
+	_ = progressBar(0.5, 0, cOK)
+}
+
+func TestExpectedAgentRun(t *testing.T) {
+	cases := map[string]string{"08:30": "08:31", "08:31": "08:31", "13:30": "13:31", "08:47": "09:01", "08:00": "08:01"}
+	for in, want := range cases {
+		m, _ := minuteOf(in)
+		if got := clockOf(expectedAgentRun(m)); got != want {
+			t.Errorf("expectedAgentRun(%s) = %s, want %s", in, got, want)
 		}
 	}
+}
 
-	if !current.current {
-		t.Fatalf("classic preset was not marked current: %#v", current)
+func TestBuildWeekSkipsHolidayTarget(t *testing.T) {
+	d := previewDashboard("11:07", slotsAt("08:31", ""))
+	p := d.plan()
+	week := buildWeek(p.now, p, d.homeDays, d.monthSigns, d.cfg.Schedule)
+	if len(week) != 5 {
+		t.Fatalf("week has %d days", len(week))
 	}
-	if isSelectableAction(current) {
-		t.Fatalf("current preset should be read-only: %#v", current)
+	if week[3].kind != kindHoliday || week[3].target != 0 {
+		t.Fatalf("Thursday = %+v, want holiday with no target", week[3])
 	}
-	if current.name != "classic" || current.desc != "Current schedule" {
-		t.Fatalf("unexpected current preset label: %#v", current)
+	if week[0].worked != 8*time.Hour+32*time.Minute {
+		t.Fatalf("Monday worked = %v", week[0].worked)
+	}
+	if !week[2].isToday || week[2].worked != p.workedDur {
+		t.Fatalf("today not wired into the week: %+v", week[2])
 	}
 }
 
-func TestGetActionsDisablesGitHubActionsWhenForkMissing(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{
-			WoffuCompanyURL: "https://example.woffu.com",
-		},
+func TestNextWorkingDaySkipsHoliday(t *testing.T) {
+	d := previewDashboard("18:00", nil)
+	nd, ok := nextWorkingDay(at("18:00"), d.homeDays, d.cfg.Schedule)
+	if !ok || nd.Format("2006-01-02") != "2026-09-25" {
+		t.Fatalf("next working day = %v, want Fri 25 (Thu 24 is a holiday)", nd)
 	}
+}
 
-	actions := d.getActions()
-	for _, key := range []string{"auto-unavailable", "sync-unavailable", "open-gh-unavailable"} {
-		t.Run(key, func(t *testing.T) {
-			var found *action
-			for i := range actions {
-				if actions[i].key == key {
-					found = &actions[i]
-					break
-				}
+// ── Signing always asks first ──
+
+func TestSignKeyOpensConfirmAndEscCancels(t *testing.T) {
+	d := previewDashboard("11:07", slotsAt("08:31", ""))
+	d.Update(key("s"))
+	if d.overlay != overlayConfirm || d.confirm == nil || !strings.Contains(d.confirm.subject, "OUT") {
+		t.Fatalf("s should open an OUT confirmation, got overlay %v %+v", d.overlay, d.confirm)
+	}
+	d.Update(key("esc"))
+	if d.overlay != overlayNone || d.signing {
+		t.Fatal("esc must close without signing")
+	}
+}
+
+func TestSignOnHolidayNeedsExplicitYes(t *testing.T) {
+	d := previewDashboard("10:00", nil)
+	d.now = fixed("2026-09-24 10:00")
+	d.askSign()
+	if d.confirm == nil || !d.confirm.danger {
+		t.Fatal("signing on a holiday must be a dangerous confirmation")
+	}
+	fired := false
+	d.confirm.onYes = func() tea.Cmd { fired = true; return nil }
+	d.confirmAt = time.Now().Add(-time.Second)
+	d.Update(key("enter"))
+	if fired || d.overlay != overlayConfirm {
+		t.Fatal("enter must not confirm a dangerous action")
+	}
+	d.Update(key("y"))
+	if !fired {
+		t.Fatal("y must confirm")
+	}
+}
+
+// ── Palette ──
+
+func TestPaletteFiltersAndRuns(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.Update(key("enter"))
+	if d.overlay != overlayPalette {
+		t.Fatal("enter on Today opens the palette")
+	}
+	for _, r := range "balance" {
+		d.Update(key(string(r)))
+	}
+	items := d.filteredActions()
+	if len(items) == 0 || items[d.cursor].key != "tab:balance" {
+		t.Fatalf("filter 'balance' -> %+v", items)
+	}
+	d.Update(key("enter"))
+	if d.overlay != overlayNone || d.activeTab != tabBalance {
+		t.Fatal("running 'Balance' should switch tab and close")
+	}
+}
+
+func TestPaletteEscClearsQueryThenCloses(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.openPalette()
+	d.Update(key("x"))
+	d.Update(key("esc"))
+	if d.overlay != overlayPalette || d.query != "" {
+		t.Fatal("first esc clears the query")
+	}
+	d.Update(key("esc"))
+	if d.overlay != overlayNone {
+		t.Fatal("second esc closes")
+	}
+}
+
+func TestPalettePresetsSortedAndCurrentNotRunnable(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cfg.SavedSchedules = map[string]config.Schedule{"zeta": {}, "alpha": {}, "classic": {}}
+	var keys []string
+	for _, a := range d.getActions() {
+		if strings.HasPrefix(a.key, "preset:") {
+			keys = append(keys, a.key)
+			if a.key == "preset:classic" && a.enabled() {
+				t.Fatal("the schedule in use must not be runnable")
 			}
-			if found == nil {
-				t.Fatalf("missing action %s in %#v", key, actions)
-			}
-			if isSelectableAction(*found) {
-				t.Fatalf("%s should be disabled: %#v", key, *found)
-			}
-		})
-	}
-}
-
-func TestMoveActionCursorSkipsReadOnlyRows(t *testing.T) {
-	actions := []action{
-		{key: "---", name: "Section"},
-		{key: "disabled", name: "Disabled", disabled: true},
-		{key: "preset:classic", name: "classic", current: true},
-		{key: "sign", name: "Sign"},
-		{key: "sync", name: "Sync"},
-	}
-
-	if got := firstSelectableAction(actions); got != 3 {
-		t.Fatalf("first selectable = %d, want 3", got)
-	}
-	if got := moveActionCursor(actions, 3, 1); got != 4 {
-		t.Fatalf("move down = %d, want 4", got)
-	}
-	if got := moveActionCursor(actions, 3, -1); got != 4 {
-		t.Fatalf("move up should wrap to last selectable, got %d", got)
-	}
-	if got := moveActionCursor(actions, 4, 1); got != 3 {
-		t.Fatalf("move down should wrap to first selectable, got %d", got)
-	}
-}
-
-func TestExecuteSavePresetOpensNameInput(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}, overlay: overlayMenu, presetInput: "old"}
-
-	if cmd := d.executeAction(action{key: "save-preset", name: "Save as preset"}); cmd != nil {
-		t.Fatal("save preset should only change overlay state")
-	}
-	if d.overlay != overlaySavePreset {
-		t.Fatalf("overlay = %v, want save preset overlay", d.overlay)
-	}
-	if d.presetInput != "" {
-		t.Fatalf("preset input = %q, want empty", d.presetInput)
-	}
-}
-
-func TestRenderOverlayMenuShowsClearPresetState(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{
-			ActiveSchedule:  "classic",
-			GithubFork:      "owner/woffux",
-			WoffuCompanyURL: "https://example.woffu.com",
-			SavedSchedules: map[string]config.Schedule{
-				"classic":   {},
-				"lunchtime": {},
-			},
-		},
-		width:  100,
-		height: 32,
-	}
-	active := true
-	d.autoActive = &active
-
-	rendered := d.renderOverlayMenu()
-	for _, want := range []string{
-		"Actions",
-		"Disable auto-sign",
-		"✓ classic",
-		"Current schedule",
-		"lunchtime",
-		"Save as preset",
-		"Tools",
-		"Open GitHub Actions",
-	} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("rendered menu missing %q:\n%s", want, rendered)
 		}
 	}
-	if strings.Contains(rendered, "preset-active") {
-		t.Fatalf("rendered stale preset-active marker:\n%s", rendered)
+	if strings.Join(keys, ",") != "preset:alpha,preset:classic,preset:zeta" {
+		t.Fatalf("preset order = %v", keys)
+	}
+}
+
+func TestPaletteDisablesGitHubWithoutFork(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cfg.GithubFork = ""
+	for _, a := range d.getActions() {
+		if (a.key == "toggle-github" || a.key == "open-github") && a.enabled() {
+			t.Fatalf("%s should be disabled without a fork", a.key)
+		}
+		if a.key == "sync" {
+			t.Fatal("sync should be hidden without a fork")
+		}
+	}
+}
+
+func TestMoveCursorSkipsDisabled(t *testing.T) {
+	items := []action{{key: "a"}, {key: "b", disabled: true}, {key: "c", current: true}, {key: "d"}}
+	if got := moveCursor(items, 0, 1); got != 3 {
+		t.Fatalf("down from a = %d, want d", got)
+	}
+	if got := moveCursor(items, 3, 1); got != 0 {
+		t.Fatalf("down from d wraps to a, got %d", got)
+	}
+}
+
+// ── Calendar ──
+
+func TestCalendarMoveCrossesMonths(t *testing.T) {
+	c := newCalendarGrid(2026, time.September, at("11:00"))
+	c.cursor = 30
+	if !c.move(1) || c.month != time.October || c.cursor != 1 {
+		t.Fatalf("right from Sep 30 -> %v %d", c.month, c.cursor)
+	}
+	if !c.move(-7) || c.month != time.September || c.cursor != 24 {
+		t.Fatalf("up from Oct 1 -> %v %d", c.month, c.cursor)
+	}
+	if c.move(1) {
+		t.Fatal("moving inside the month must not request a fetch")
+	}
+}
+
+func TestCalendarExtendSkipsWeekends(t *testing.T) {
+	c := newCalendarGrid(2026, time.September, at("11:00"))
+	c.cursor = 25 // Friday
+	c.extend(7)
+	got := strings.Join(c.selectedDates(), ",")
+	if strings.Contains(got, "-26") || strings.Contains(got, "-27") || !strings.Contains(got, "2026-09-25") || !strings.Contains(got, "2026-09-28") {
+		t.Fatalf("range selection = %s", got)
+	}
+}
+
+func TestEligibleDatesFiltersNonWorkingAndRequested(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	got := d.cal.eligibleDates([]string{"2026-09-24", "2026-09-26", "2026-09-28", "2026-09-29", "2026-10-05", "2026-10-10"})
+	// Oct 5 isn't loaded, so it can't be verified and is left out.
+	if strings.Join(got, ",") != "2026-09-28" {
+		t.Fatalf("eligible = %v", got)
+	}
+}
+
+func TestCalendarTeleworkKeyConfirmsBeforeSending(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.activeTab = tabCalendar
+	d.cal.cursor = 28
+	d.Update(key("t"))
+	if d.overlay != overlayConfirm || d.busy != "" {
+		t.Fatalf("t should open a confirmation and send nothing, overlay=%v busy=%q", d.overlay, d.busy)
+	}
+	if !strings.Contains(d.confirm.subject, "Telework · 1 day") {
+		t.Fatalf("subject = %q", d.confirm.subject)
+	}
+	d.Update(key("esc"))
+	if d.overlay != overlayNone {
+		t.Fatal("esc closes the confirmation")
+	}
+}
+
+func TestCancelOnlyOfferedWithRequests(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cal.cursor = 28
+	for _, a := range d.dayActions() {
+		if a.key == "cancel-all" {
+			t.Fatal("no requests on the 28th, cancel must not be offered")
+		}
+	}
+	d.cal.cursor = 29
+	found := false
+	for _, a := range d.dayActions() {
+		if a.key == "cancel-all" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pending telework on the 29th should be cancellable")
+	}
+}
+
+func TestDescribeDates(t *testing.T) {
+	cases := map[string][]string{
+		"Mon 28 Sep 2026":       {"2026-09-28"},
+		"Mon 28 – Wed 30 Sep":   {"2026-09-30", "2026-09-28", "2026-09-29"},
+		"Mon 28 Sep, Fri 2 Oct": {"2026-09-28", "2026-10-02"},
+	}
+	for want, in := range cases {
+		if got := describeDates(in); got != want {
+			t.Errorf("describeDates(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// ── State messages ──
+
+func TestAutoStatusIgnoresStaleRepo(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.autoActive = nil
+	d.Update(autoStatusMsg{repo: "someone/else", enabled: true})
+	if d.autoActive != nil {
+		t.Fatal("status for another repo must be ignored")
+	}
+	d.Update(autoStatusMsg{repo: "owner/woffux", enabled: true, syncChecked: true, inSync: false})
+	if !d.needsAutoSync() {
+		t.Fatal("out-of-sync workflow should be flagged")
 	}
 }
 
 func TestApplyConfigClearsStaleAutoStatus(t *testing.T) {
-	active := true
-	d := &Dashboard{
-		cfg:        &config.Config{GithubFork: "old/woffux"},
-		autoActive: &active,
-	}
-
-	d.applyConfig(&config.Config{GithubFork: "new/woffux"})
+	d := previewDashboard("11:07", nil)
+	on := true
+	d.autoActive = &on
+	d.applyConfig(&config.Config{GithubFork: "other/fork"})
 	if d.autoActive != nil {
-		t.Fatal("expected auto status to reset when fork changes")
-	}
-
-	active = true
-	d.autoActive = &active
-	d.applyConfig(&config.Config{})
-	if d.autoActive != nil {
-		t.Fatal("expected auto status to reset when fork is removed")
+		t.Fatal("changing fork must reset auto-sign status")
 	}
 }
 
-func TestAutoStatusMsgIgnoresStaleRepo(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{GithubFork: "current/woffux"}}
-
-	d.Update(autoStatusMsg{repo: "old/woffux", enabled: true})
-	if d.autoActive != nil {
-		t.Fatal("stale auto status should be ignored")
-	}
-
-	d.Update(autoStatusMsg{repo: "current/woffux", enabled: true})
-	if d.autoActive == nil || !*d.autoActive {
-		t.Fatalf("current auto status was not applied: %#v", d.autoActive)
+func TestToastClearsOnlyItsOwnMessage(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.showToast("first", toastOK)
+	first := d.toast.id
+	d.showToast("second", toastOK)
+	d.Update(clearToastMsg{id: first})
+	if d.toast.text != "second" {
+		t.Fatal("an old timer must not clear a newer toast")
 	}
 }
 
-func TestAutoStatusMsgTracksOutOfSyncWorkflow(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{GithubFork: "current/woffux"}}
-
-	d.Update(autoStatusMsg{repo: "current/woffux", enabled: true, syncChecked: true, inSync: false})
-
-	if !d.needsAutoSync() {
-		t.Fatal("expected active out-of-sync workflow to need sync")
-	}
-
-	actions := d.getActions()
-	if len(actions) < 2 || actions[1].key != "sync" || actions[1].name != "Fix auto-sign sync" {
-		t.Fatalf("expected fix-sync action near top, got %#v", actions)
+func TestRequestDoneReportsFailures(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cal.selected["2026-09-28"] = true
+	d.Update(requestDoneMsg{count: 2, failed: 1, action: "sent"})
+	if len(d.cal.selected) != 0 || d.toast.kind != toastErr || !strings.Contains(d.toast.text, "1 failed") {
+		t.Fatalf("toast = %+v, selection = %v", d.toast, d.cal.selected)
 	}
 }
 
-func TestRenderAutoSignShowsSyncNeeded(t *testing.T) {
-	active := true
-	inSync := false
-	d := &Dashboard{
-		cfg:        &config.Config{GithubFork: "owner/woffux", Schedule: config.DefaultSchedule()},
-		autoActive: &active,
-		autoInSync: &inSync,
-		width:      100,
-	}
+// ── Rendering never panics and always fits ──
 
-	rendered := d.renderAutoSign()
-	if !strings.Contains(rendered, "sync needed") {
-		t.Fatalf("rendered auto-sign status missing sync warning:\n%s", rendered)
-	}
-}
-
-func TestRenderAutoSignShowsLastRunAge(t *testing.T) {
-	active := true
-	inSync := true
-	d := &Dashboard{
-		cfg:        &config.Config{GithubFork: "owner/woffux", Schedule: config.DefaultSchedule()},
-		autoActive: &active,
-		autoInSync: &inSync,
-		lastRunAt:  time.Now().Add(-90 * time.Minute),
-		lastRunOK:  true,
-		width:      100,
-	}
-
-	rendered := d.renderAutoSign()
-	if !strings.Contains(rendered, "last run 1h30m ago") {
-		t.Fatalf("rendered auto-sign missing last run age:\n%s", rendered)
-	}
-}
-
-func TestRenderAutoSignShowsLocalAgentState(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("local agent row only renders on macOS")
-	}
-	agentOn := true
-	d := &Dashboard{
-		cfg:         &config.Config{Schedule: config.DefaultSchedule()},
-		agentActive: &agentOn,
-		width:       100,
-	}
-
-	rendered := d.renderAutoSign()
-	if !strings.Contains(rendered, "This Mac") {
-		t.Fatalf("rendered auto-sign missing local agent row:\n%s", rendered)
-	}
-}
-
-func TestSignDoneVerifiedFlash(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}, signing: true}
-
-	d.Update(signDoneMsg{verified: true})
-	if !strings.Contains(d.flash, "verified") {
-		t.Fatalf("expected verified flash, got %q", d.flash)
-	}
-	if d.signing {
-		t.Fatal("signing flag not cleared")
-	}
-}
-
-func TestFormatDurationShort(t *testing.T) {
-	cases := map[time.Duration]string{
-		45 * time.Minute:             "45m",
-		2*time.Hour + 10*time.Minute: "2h10m",
-		3 * time.Hour:                "3h00m",
-		-5 * time.Minute:             "0m",
-	}
-	for dur, want := range cases {
-		if got := formatDurationShort(dur); got != want {
-			t.Fatalf("formatDurationShort(%v) = %q, want %q", dur, got, want)
+func TestViewFitsEverySizeAndScreen(t *testing.T) {
+	overlays := []overlayKind{overlayNone, overlayPalette, overlayDay, overlayHelp, overlayInput}
+	for _, w := range []int{30, 44, 60, 80, 100, 120, 200} {
+		for _, h := range []int{10, 14, 24, 40, 60} {
+			for tab := 0; tab < tabCount; tab++ {
+				for _, ov := range overlays {
+					d := previewDashboard("11:07", slotsAt("08:31", ""))
+					d.width, d.height = w, h
+					d.activeTab = tab
+					d.overlay = ov
+					out := d.View()
+					lines := strings.Split(out, "\n")
+					if len(lines) > h {
+						t.Fatalf("%dx%d tab %d overlay %d: %d lines", w, h, tab, ov, len(lines))
+					}
+					for i, l := range lines {
+						if lw := len([]rune(stripANSI(l))); lw > w {
+							t.Fatalf("%dx%d tab %d overlay %d line %d is %d wide: %q", w, h, tab, ov, i, lw, stripANSI(l))
+						}
+					}
+				}
+			}
 		}
 	}
 }
 
-func TestTrySignOpensConfirmOverlay(t *testing.T) {
-	d := &Dashboard{
-		cfg:      &config.Config{},
-		signInfo: &woffu.SignInfo{IsWorkingDay: true},
-	}
-
-	if cmd := d.trySign(); cmd != nil {
-		t.Fatal("trySign should only open the confirm overlay")
-	}
-	if d.overlay != overlayConfirmSign {
-		t.Fatalf("overlay = %v, want confirm sign", d.overlay)
-	}
-}
-
-func TestConfirmSignOverlayEscCancels(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}, overlay: overlayConfirmSign}
-
-	model, cmd := d.handleKey(keyMsg("esc"))
-	d = model.(*Dashboard)
-	if d.overlay != overlayNone {
-		t.Fatalf("overlay = %v, want none after esc", d.overlay)
-	}
-	if cmd != nil {
-		t.Fatal("esc must not trigger a sign")
+// At comfortable sizes nothing should rely on the clipping safety net.
+func TestNoClippingAtComfortableSizes(t *testing.T) {
+	overlays := []overlayKind{overlayNone, overlayPalette, overlayDay, overlayHelp, overlayInput}
+	for _, w := range []int{60, 80, 100, 120, 160} {
+		for tab := 0; tab < tabCount; tab++ {
+			for _, ov := range overlays {
+				for _, now := range []string{"07:52", "09:12", "11:07", "13:48", "18:20"} {
+					d := previewDashboard(now, slotsAt("08:31", ""))
+					d.width, d.height = w, 44
+					d.activeTab, d.overlay = tab, ov
+					before := clipCount
+					out := d.View()
+					if clipCount != before {
+						t.Errorf("%d wide, tab %d, overlay %d at %s needed clipping:\n%s", w, tab, ov, now, stripANSI(out))
+						return
+					}
+				}
+			}
+		}
 	}
 }
 
-func TestHelpOverlayOpensAndCloses(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}, width: 80, height: 30}
+// ── Safety regressions (found in review) ──
 
-	model, _ := d.handleKey(keyMsg("?"))
-	d = model.(*Dashboard)
-	if d.overlay != overlayHelp {
-		t.Fatalf("overlay = %v, want help", d.overlay)
+// A date we have no data for must never be requested.
+func TestUnverifiedDatesAreNeverEligible(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cal.shiftMonth(1) // October: not loaded
+	if d.cal.loaded {
+		t.Fatal("October should not be loaded yet")
 	}
-	if !strings.Contains(stripAnsi(d.View()), "Keyboard shortcuts") {
-		t.Fatal("help overlay missing title")
+	if got := d.cal.eligibleDates([]string{"2026-10-05"}); len(got) != 0 {
+		t.Fatalf("unverified date treated as eligible: %v", got)
 	}
-
-	model, _ = d.handleKey(keyMsg("x"))
-	d = model.(*Dashboard)
-	if d.overlay != overlayNone {
-		t.Fatal("any key should close help")
+	d.activeTab = tabCalendar
+	d.Update(key("t"))
+	if d.overlay == overlayConfirm {
+		t.Fatal("requests must be blocked while the month loads")
 	}
-}
-
-func TestPendingSignAction(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}}
-	if got := d.pendingSignAction(); got != "IN" {
-		t.Fatalf("empty slots → %q, want IN", got)
-	}
-	d.slots = []woffu.SignSlot{{In: "2026-06-10T08:30:00"}}
-	if got := d.pendingSignAction(); got != "OUT" {
-		t.Fatalf("open slot → %q, want OUT", got)
-	}
-}
-
-func TestWeekWorkedHoursSumsHistoryAndToday(t *testing.T) {
-	now := time.Now()
-	if wd := now.Weekday(); wd == time.Monday || wd == time.Saturday || wd == time.Sunday {
-		t.Skip("needs at least one weekday of history this week")
-	}
-	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-	d := &Dashboard{
-		cfg: &config.Config{},
-		monthSigns: []woffu.SignRecord{
-			{Date: yesterday, Time: "08:00", Type: "in"},
-			{Date: yesterday, Time: "16:30", Type: "out"},
-		},
-	}
-
-	got := d.weekWorkedHours()
-	want := 8*time.Hour + 30*time.Minute
-	if got != want {
-		t.Fatalf("weekWorkedHours = %v, want %v", got, want)
-	}
-}
-
-func TestWeeklyTargetHours(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{Schedule: config.DefaultSchedule()}}
-	got := d.weeklyTargetHours()
-	if got <= 0 {
-		t.Fatalf("weeklyTargetHours = %v, want > 0", got)
-	}
-}
-
-func TestNextSignerLabelPrefersAgent(t *testing.T) {
-	agentOn := true
-	autoOn := true
-	d := &Dashboard{cfg: &config.Config{}, agentActive: &agentOn, autoActive: &autoOn}
-	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "This Mac") {
-		t.Fatal("agent active should label This Mac")
-	}
-
-	agentOff := false
-	d.agentActive = &agentOff
-	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "GitHub") {
-		t.Fatal("GitHub fallback label expected")
-	}
-
-	autoOff := false
-	d.autoActive = &autoOff
-	if !strings.Contains(stripAnsi(d.nextSignerLabel()), "manual") {
-		t.Fatal("no signer should warn manual")
-	}
-}
-
-func TestDataMsgStoresCompanyID(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{}}
-
-	d.Update(dataMsg{userId: 12, companyId: 34})
-
-	if d.userId != 12 || d.companyId != 34 {
-		t.Fatalf("cached ids = (%d, %d), want (12, 34)", d.userId, d.companyId)
-	}
-}
-
-func TestRequestDoneClearsCalendarSelection(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{},
-		cal: &calendarGrid{
-			selected: map[string]bool{"2026-05-19": true},
-		},
-	}
-
-	d.Update(requestDoneMsg{count: 1, action: "submitted"})
-
+	d.Update(key(" "))
 	if len(d.cal.selected) != 0 {
-		t.Fatalf("selection was not cleared: %#v", d.cal.selected)
+		t.Fatal("selection must be blocked while the month loads")
 	}
 }
 
-func TestSignSlotSummary(t *testing.T) {
-	got := signSlotSummary([]woffu.SignSlot{
-		{In: "2026-05-19T08:30:00.000", Out: "2026-05-19T13:30:00.000"},
-		{In: "2026-05-19T14:15:00.000"},
-	})
-
-	for _, want := range []string{"Sign history:", "IN 08:30", "OUT 13:30", "IN 14:15"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("summary missing %q: %s", want, got)
-		}
+// Selections in a month we navigated away from keep using that month's data.
+func TestCrossMonthSelectionUsesCachedMonth(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.cal.selected["2026-09-29"] = true // pending telework already
+	d.cal.selected["2026-09-28"] = true
+	d.cal.shiftMonth(1)
+	d.cal.setDays([]woffu.CalendarDay{{Date: "2026-10-05", Status: "working", Mode: "office"}})
+	d.cal.selected["2026-10-05"] = true
+	got := strings.Join(d.cal.eligibleDates(d.cal.selectedDates()), ",")
+	if got != "2026-09-28,2026-10-05" {
+		t.Fatalf("eligible across months = %s", got)
+	}
+	if ids, _ := d.activeRequests(d.cal.selectedDates()); len(ids) != 1 {
+		t.Fatalf("pending request in September not found from October: %v", ids)
 	}
 }
 
-func TestNextScheduledSignShowsMissedFirstSign(t *testing.T) {
-	d := &Dashboard{cfg: &config.Config{Schedule: config.DefaultSchedule()}}
-	now := time.Date(2026, time.May, 19, 8, 58, 0, 0, time.Local)
-
-	next, ok := d.nextScheduledSignAt(now)
-	if !ok {
-		t.Fatal("expected next scheduled sign")
+// A background fetch failing must not release the sign-in-flight guard.
+func TestFetchErrorKeepsSignGuard(t *testing.T) {
+	d := previewDashboard("11:07", slotsAt("08:31", ""))
+	d.signing = true
+	d.busy = "Signing in Woffu"
+	d.Update(errMsg{err: errTest("network down")})
+	if !d.signing || d.busy == "" {
+		t.Fatal("fetch error cleared the sign guard")
 	}
-	if next.Time != "08:30" || next.Action != "IN" || !next.Missed {
-		t.Fatalf("next = %#v, want missed 08:30 IN", next)
+	d.Update(key("s"))
+	if d.overlay == overlayConfirm {
+		t.Fatal("a second sign must not be offered while one is in flight")
 	}
-}
-
-func TestNextScheduledSignFollowsCompletedSignEvents(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{Schedule: config.DefaultSchedule()},
-		slots: []woffu.SignSlot{
-			{In: "2026-05-19T08:40:00.000"},
-		},
-	}
-	now := time.Date(2026, time.May, 19, 9, 0, 0, 0, time.Local)
-
-	next, ok := d.nextScheduledSignAt(now)
-	if !ok {
-		t.Fatal("expected next scheduled sign")
-	}
-	if next.Time != "13:30" || next.Action != "OUT" || next.Missed {
-		t.Fatalf("next = %#v, want upcoming 13:30 OUT", next)
+	d.Update(actionErrMsg{err: errTest("sign failed")})
+	if d.signing || d.busy != "" {
+		t.Fatal("an action error must release the guard")
 	}
 }
 
-func TestExecuteViewSignsShowsFlash(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{},
-		cal: newCalendarGrid(2026, time.May, []woffu.CalendarDay{
-			{
-				Date: "2026-05-19",
-				Signs: []woffu.SignSlot{
-					{In: "2026-05-19T08:30:00.000", Out: "2026-05-19T13:30:00.000"},
-				},
-			},
-		}),
+// Holding Enter must not walk palette → sign → confirm.
+func TestConfirmIgnoresKeyRepeat(t *testing.T) {
+	d := previewDashboard("11:07", slotsAt("08:31", ""))
+	d.askSign()
+	fired := false
+	d.confirm.onYes = func() tea.Cmd { fired = true; return nil }
+	d.Update(key("enter"))
+	if fired {
+		t.Fatal("enter right after opening must be ignored")
 	}
-	d.cal.cursor = 19
-
-	if cmd := d.executeDayAction(action{key: "view-signs", name: "View sign history"}); cmd == nil {
-		t.Fatal("expected clear-flash command")
-	}
-	if !strings.Contains(d.flash, "IN 08:30") || !strings.Contains(d.flash, "OUT 13:30") {
-		t.Fatalf("unexpected flash: %q", d.flash)
+	d.confirmAt = time.Now().Add(-time.Second)
+	d.Update(key("enter"))
+	if !fired {
+		t.Fatal("a deliberate enter must confirm")
 	}
 }
 
-func TestNoopDayActionIsDisabled(t *testing.T) {
-	d := &Dashboard{
-		cfg: &config.Config{},
-		cal: newCalendarGrid(2026, time.May, []woffu.CalendarDay{
-			{Date: "2026-05-19", Status: "holiday", EventNames: []string{"Local holiday"}},
-		}),
-	}
-	d.cal.cursor = 19
-
-	actions := d.getDayActions()
-	if len(actions) != 1 || actions[0].key != "noop" || !actions[0].disabled {
-		t.Fatalf("unexpected day actions: %#v", actions)
+func TestRequestsBlockedWhileBusy(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	d.activeTab = tabCalendar
+	d.cal.cursor = 28
+	d.busy = "Requesting telework for 5 days"
+	d.Update(key("t"))
+	if d.overlay == overlayConfirm {
+		t.Fatal("a new request must wait for the one in flight")
 	}
 }
+
+type errTest string
+
+func (e errTest) Error() string { return string(e) }
