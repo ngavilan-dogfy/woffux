@@ -65,6 +65,8 @@ func (d *Dashboard) renderBody(h int) string {
 		b = d.renderToday(h)
 	case tabCalendar:
 		b = d.renderCalendar(h)
+	case tabSchedule:
+		b = d.renderSchedule(h)
 	case tabBalance:
 		b = d.renderBalance(h)
 	}
@@ -81,6 +83,9 @@ func (d *Dashboard) renderHeader() string {
 		right = d.spin.View() + " " + right
 	} else if !d.fetchedAt.IsZero() && now.Sub(d.fetchedAt) > 10*time.Minute {
 		right = sWarn.Render("● stale") + "  " + right
+	}
+	if d.latest != "" {
+		right = sKey.Render("U") + sOK.Render(" ⬆ "+d.latest) + "   " + right
 	}
 
 	// Degrade gracefully: drop the date, then shorten inactive tabs, then
@@ -163,8 +168,10 @@ func (d *Dashboard) footerHints() []string {
 		return []string{keycap("↑↓", "choose"), keycap("⏎", "run"), sFaint.Render("type to filter")}
 	case overlayDay:
 		return []string{keycap("↑↓", "choose"), keycap("⏎", "run"), sFaint.Render("or press the letter")}
-	case overlayConfirm, overlayInput, overlayHelp:
+	case overlayConfirm, overlayInput, overlayHelp, overlayEditor, overlayDates:
 		return nil
+	case overlayMenu:
+		return []string{keycap("↑↓", "choose"), keycap("⏎", "select")}
 	}
 	switch d.activeTab {
 	case tabToday:
@@ -176,6 +183,8 @@ func (d *Dashboard) footerHints() []string {
 		} else {
 			hints = []string{keycap("←↑↓→", "move"), keycap("space", "select"), keycap("[ ]", "month"), keycap("t", "telework"), keycap("v", "vacation"), keycap("⏎", "more")}
 		}
+	case tabSchedule:
+		hints = []string{keycap("↑↓", "choose"), keycap("⏎", "use"), keycap("e", "edit"), keycap("n", "new"), keycap("c", "copy"), keycap("R", "rename"), keycap("x", "delete"), keycap("S", "summer"), keycap("t", "timing")}
 	case tabBalance:
 		hints = []string{keycap("⏎", "actions"), keycap("r", "refresh"), keycap("o", "open Woffu")}
 	}

@@ -86,13 +86,16 @@ func (d *Dashboard) getActions() []action {
 		}
 		add(a)
 	}
-	add(action{key: "edit-schedule", section: "Schedule", title: "Edit schedule times", hint: "opens the editor", shortcut: "e"})
+	add(action{key: "edit-schedule", section: "Schedule", title: "Edit my week", hint: "as text, with a live preview", shortcut: "e"})
+	add(action{key: "new-schedule", section: "Schedule", title: "New schedule…", hint: "from a template"})
+	add(action{key: "seasons", section: "Schedule", title: "Summer hours…", hint: "switch schedule by date"})
 	add(action{key: "save-preset", section: "Schedule", title: "Save schedule as…", hint: "keep it as a preset"})
 
 	// Go to
 	add(action{key: "tab:today", section: "Go to", title: "Today", shortcut: "1"})
 	add(action{key: "tab:calendar", section: "Go to", title: "Calendar", hint: "requests, telework, vacation", shortcut: "2"})
-	add(action{key: "tab:balance", section: "Go to", title: "Balance", hint: "days and hours left", shortcut: "3"})
+	add(action{key: "tab:schedule", section: "Go to", title: "Schedules", hint: "presets, summer hours, timing", shortcut: "3"})
+	add(action{key: "tab:balance", section: "Go to", title: "Balance", hint: "days and hours left", shortcut: "4"})
 	add(action{key: "open-woffu", section: "Go to", title: "Open Woffu in browser", shortcut: "o", disabled: strings.TrimSpace(d.cfg.WoffuCompanyURL) == ""})
 	gh := action{key: "open-github", section: "Go to", title: "Open GitHub Actions", shortcut: "g"}
 	if !d.hasFork() {
@@ -101,6 +104,9 @@ func (d *Dashboard) getActions() []action {
 	add(gh)
 
 	// App
+	if d.latest != "" {
+		add(action{key: "update", section: "App", title: "Update to " + d.latest, hint: "you have " + AppVersion, shortcut: "U"})
+	}
 	add(action{key: "edit-config", section: "App", title: "Settings", hint: "credentials, locations, Telegram"})
 	add(action{key: "help", section: "App", title: "Keyboard shortcuts", shortcut: "?"})
 	add(action{key: "quit", section: "App", title: "Quit", shortcut: "q"})
@@ -166,9 +172,17 @@ func (d *Dashboard) runAction(key string) tea.Cmd {
 	case "sync":
 		return d.syncGitHub()
 	case "edit-schedule":
-		return d.execWoffux("Schedule", "schedule", "edit")
+		d.switchTab(tabSchedule)
+		d.selectActive()
+		return d.schedEdit()
 	case "edit-config":
 		return d.execWoffux("Settings", "config", "edit")
+	case "new-schedule":
+		d.switchTab(tabSchedule)
+		return d.schedNew()
+	case "seasons":
+		d.switchTab(tabSchedule)
+		return d.schedSeasons()
 	case "save-preset":
 		d.input = ""
 		d.overlay = overlayInput
@@ -177,12 +191,16 @@ func (d *Dashboard) runAction(key string) tea.Cmd {
 		d.switchTab(tabToday)
 	case "tab:calendar":
 		d.switchTab(tabCalendar)
+	case "tab:schedule":
+		d.switchTab(tabSchedule)
 	case "tab:balance":
 		d.switchTab(tabBalance)
 	case "open-woffu":
 		return d.openWoffu()
 	case "open-github":
 		return d.openGitHub()
+	case "update":
+		return d.runUpdate()
 	case "help":
 		d.overlay = overlayHelp
 	case "quit":

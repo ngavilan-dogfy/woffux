@@ -142,3 +142,23 @@ func TestFetchLatestReleaseFromWeb(t *testing.T) {
 		t.Fatalf("url = %q, err = %v", url, err)
 	}
 }
+
+func TestParseReleaseNotes(t *testing.T) {
+	body := "## What's Changed\n* feat(cli): redo every command and flow in the new style by @ngavilan-dogfy in https://github.com/x/pull/9\n* fix: keep things alive (#10)\n\n**Full Changelog**: https://x"
+	got := parseReleaseNotes(body)
+	if len(got) != 2 || got[0] != "Redo every command and flow in the new style" || got[1] != "Keep things alive" {
+		t.Fatalf("notes = %q", got)
+	}
+}
+
+func TestVersionNewer(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{{"v5.12.0", "v5.9.0", true}, {"v5.9.0", "v5.12.0", false}, {"v5.12.1", "v5.12.1", false}, {"v1.0.0", "dev", true}}
+	for _, c := range cases {
+		if got := versionNewer(c.a, c.b); got != c.want {
+			t.Errorf("versionNewer(%s,%s) = %v", c.a, c.b, got)
+		}
+	}
+}

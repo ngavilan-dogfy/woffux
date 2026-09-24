@@ -48,12 +48,13 @@ Nothing is signed during setup. At the end you see a summary and exactly when th
 
 ## The dashboard
 
-Run `woffux`. Three screens, each answering one question:
+Run `woffux`. Four screens, each answering one question:
 
 | | |
 |---|---|
 | **Today** — *Where do I stand?* Working, on a break, done, or a holiday. Hours worked against today's target, the next sign and **who** will make it and when, a timeline of plan vs. reality, your week and the autopilot's health. | <img src="assets/screenshot-today.png" width="420"> |
 | **Calendar** — the month at a glance: office, remote, time off, holidays, pending requests, and ✓ / ! for days signed or worked without signing. Select days (ranges too) and press `t` for telework or `v` for vacation. | <img src="assets/screenshot-calendar.png" width="420"> |
+| **Schedule** — *when do I sign?* Your presets, the selected week drawn hour by hour, summer hours and the natural moments of the next days. `⏎` use · `e` edit as text with a live preview · `n` new from a template · `c` copy · `R` rename · `x` delete · `S` summer hours · `t` timing. | |
 | **Command palette** — press `Enter`, `:` or `Ctrl+K` and type. Every action is there, with its shortcut. | <img src="assets/screenshot-palette.png" width="420"> |
 
 Anything that writes to Woffu (a sign, a request, a cancellation) asks first and tells you exactly what will be sent.
@@ -64,12 +65,13 @@ Anything that writes to Woffu (a sign, a request, a cancellation) asks first and
 | Key | Action |
 |---|---|
 | `Enter` / `:` / `Ctrl+K` | Command palette |
-| `1` `2` `3` / `Tab` | Today · Calendar · Balance |
+| `1` `2` `3` `4` / `Tab` | Today · Calendar · Schedule · Balance |
 | `s` | Clock in / out now (asks first) |
 | `r` | Refresh |
 | `m` | Sign from this Mac on / off |
 | `a` | GitHub backup signer on / off |
-| `e` | Edit schedule |
+| `e` | Edit your week (Schedule tab) |
+| `U` | Update woffux (shown when a new version exists) |
 | `o` / `g` | Open Woffu / GitHub Actions |
 | `?` | All shortcuts |
 | `q` | Quit |
@@ -190,7 +192,7 @@ Or use the calendar in the dashboard: select days, press `t` or `v`, confirm.
 | `woffux request` · `request cancel [id]` | Create / cancel requests (interactive lists) |
 | `woffux config` · `config edit` | See / change any setting |
 | `woffux open [docs\|calendar\|github]` | Open in the browser |
-| `woffux update` | Update to the latest version |
+| `woffux update` | What's new, download with progress, verify, install (`-y` skips the question) |
 
 Query commands print colours in a terminal, TSV when piped, and JSON with `--json`:
 

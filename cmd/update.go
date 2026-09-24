@@ -8,14 +8,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/huh/spinner"
-	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
+
+	"github.com/ngavilan-dogfy/woffux/internal/agent"
 )
 
 var Version = "dev"
@@ -36,125 +35,54 @@ type githubReleaseAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+var updateYes bool
+
 var updateCmd = &cobra.Command{
 	Use:     "update",
 	Aliases: []string{"upgrade"},
 	Short:   "Update woffux to the latest version",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		sLabel := lipgloss.NewStyle().Foreground(obFaint)
-
-		fmt.Printf("\n  %s %s\n", sLabel.Render("Current version:"), sBold.Render(Version))
-
-		assetName, err := releaseAssetName(runtime.GOOS, runtime.GOARCH)
-		if err != nil {
+		u := newUpdater(updateYes || !isTTY())
+		p := tea.NewProgram(u)
+		u.program = p
+		if _, err := p.Run(); err != nil {
 			return err
 		}
-
-		var release githubRelease
-		var checkErr error
-
-		spinner.New().
-			Title("Checking for updates...").
-			Action(func() {
-				release, checkErr = fetchLatestReleaseWithFallback()
-			}).
-			Run()
-
-		if checkErr != nil {
-			fmt.Printf("  %s Could not check for updates: %s\n\n", sWarn, checkErr)
-			return nil
-		}
-
-		latestTag := release.TagName
-		fmt.Printf("  %s %s\n\n", sLabel.Render("Latest version: "), sBold.Render(latestTag))
-
-		if currentVersionIsLatest(Version, latestTag) {
-			fmt.Printf("  %s You're on the latest version.\n\n", sOk)
-			return nil
-		}
-
-		var confirm bool
-		if err := newForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title(fmt.Sprintf("Update to %s?", latestTag)).
-					Affirmative("Update").
-					Negative("Cancel").
-					Value(&confirm),
-			),
-		).Run(); err != nil {
-			return err
-		}
-
-		if !confirm {
-			return nil
-		}
-
-		url, err := release.DownloadURL(assetName)
-		if err != nil {
-			fmt.Printf("  %s %s\n\n", sWarn, err)
-			fmt.Printf("  Download manually: https://github.com/ngavilan-dogfy/woffux/releases/tag/%s\n\n", latestTag)
-			return nil
-		}
-
-		tmp, err := os.CreateTemp("", "woffux-update-*")
-		if err != nil {
-			return fmt.Errorf("create temp file: %w", err)
-		}
-		tmpPath := tmp.Name()
-		if err := tmp.Close(); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("close temp file: %w", err)
-		}
-		keepTemp := false
-		defer func() {
-			if !keepTemp {
-				os.Remove(tmpPath)
+		if u.phase != updReady {
+			if u.tmpPath != "" {
+				os.Remove(u.tmpPath)
 			}
-		}()
-
-		var downloadErr error
-		spinner.New().
-			Title(fmt.Sprintf("Downloading %s...", latestTag)).
-			Action(func() {
-				downloadErr = downloadFile(tmpPath, url)
-			}).
-			Run()
-
-		if downloadErr != nil {
-			fmt.Printf("  %s %s\n\n",
-				lipgloss.NewStyle().Foreground(obBad).Render("✗"), downloadErr)
 			return nil
 		}
-
-		if err := os.Chmod(tmpPath, 0755); err != nil {
-			return fmt.Errorf("make binary executable: %w", err)
-		}
-
-		// Install — needs to happen outside spinner so sudo can prompt
-		currentPath := updateInstallPath()
-
-		// Try without sudo first
-		mv := exec.Command("mv", tmpPath, currentPath)
-		if err := mv.Run(); err != nil {
-			// Needs sudo — tell the user and run with TTY
-			fmt.Printf("  %s Installing to %s (requires sudo)\n", sInfo, currentPath)
-			sudoMv := exec.Command("sudo", "mv", tmpPath, currentPath)
-			sudoMv.Stdin = os.Stdin
-			sudoMv.Stdout = os.Stdout
-			sudoMv.Stderr = os.Stderr
-			if err := sudoMv.Run(); err != nil {
-				keepTemp = true
-				fmt.Printf("\n  %s Install failed. Try manually:\n",
-					lipgloss.NewStyle().Foreground(obBad).Render("✗"))
-				fmt.Printf("    sudo mv %q %q\n\n", tmpPath, currentPath)
-				return nil
-			}
-		}
-
-		fmt.Printf("\n  %s Updated to %s\n\n", sOk, sBold.Render(latestTag))
-		return nil
+		return installUpdate(u.tmpPath, u.release.TagName)
 	},
+}
+
+// installUpdate swaps the verified binary into place (asking for sudo only
+// when the install directory needs it) and restarts the local agent so it
+// runs the new version.
+func installUpdate(tmpPath, tag string) error {
+	target := updateInstallPath()
+	if err := exec.Command("mv", tmpPath, target).Run(); err != nil {
+		fmt.Printf("  %s %s needs admin rights — macOS will ask for your password.\n", sInfo, target)
+		sudo := exec.Command("sudo", "mv", tmpPath, target)
+		sudo.Stdin, sudo.Stdout, sudo.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := sudo.Run(); err != nil {
+			uiErr("Install failed. Try: sudo mv %q %q", tmpPath, target)
+			return nil
+		}
+	}
+	uiOK("woffux %s installed", tag)
+	// Restart the local agent only if it runs this very binary, and let
+	// the new binary do it so the agent points at the installed path.
+	if agent.Supported() && agent.Installed() && samePath(agent.InstalledBinary(), target) {
+		if err := exec.Command(target, "agent", "on").Run(); err == nil {
+			uiOK("This Mac's signer restarted on the new version")
+		}
+	}
+	fmt.Println(uiIndent + stFaint.Render("  Open the dashboard with: woffux"))
+	fmt.Println()
+	return nil
 }
 
 func currentVersionIsLatest(current, latest string) bool {
@@ -355,4 +283,20 @@ func shouldAvoidSelfReplace(path string) bool {
 	}
 	rel, err := filepath.Rel(tmpDir, path)
 	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
+}
+
+func init() {
+	updateCmd.Flags().BoolVarP(&updateYes, "yes", "y", false, "Update without asking")
+}
+
+func samePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	if err1 != nil || err2 != nil {
+		return a == b
+	}
+	return ra == rb
 }

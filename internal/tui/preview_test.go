@@ -80,7 +80,7 @@ func previewDashboard(hhmm string, slots []woffu.SignSlot) *Dashboard {
 	d := NewDashboard(nil, nil, cfg, "")
 	d.now = func() time.Time { return now }
 	d.loading = false
-	d.width, d.height = 120, 33
+	d.width, d.height = 120, 36
 	d.profile = &woffu.UserProfile{FullName: "ALEX GARCIA"}
 	d.signInfo = &woffu.SignInfo{Date: "2026-09-23", Mode: woffu.SignModeOffice, IsWorkingDay: true,
 		NextEvents: []woffu.SignEvent{
@@ -178,7 +178,28 @@ func TestPreview(t *testing.T) {
 			d.width, d.height = 80, 44
 			return d
 		},
-		"17-loading": func() *Dashboard { d := previewDashboard("11:07", nil); d.loading = true; return d },
+		"17-loading":  func() *Dashboard { d := previewDashboard("11:07", nil); d.loading = true; return d },
+		"19-schedule": func() *Dashboard { d := previewDashboard("11:07", nil); d.activeTab = tabSchedule; return d },
+		"20-sched-editor": func() *Dashboard {
+			d := previewDashboard("11:07", nil)
+			d.activeTab = tabSchedule
+			d.openEditor(editNew, "", "summer", "L-V 8-15")
+			return d
+		},
+		"21-sched-summer": func() *Dashboard {
+			d := previewDashboard("11:07", nil)
+			d.cfg.Seasons = config.Seasons{Default: "classic", Periods: []config.Season{{Preset: "summer", From: "07-01", To: "08-31"}}}
+			d.cfg.SavedSchedules["summer"], _ = config.ParseScheduleText("mon-fri 8-15")
+			d.activeTab = tabSchedule
+			d.schedCursor = 1
+			return d
+		},
+		"22-sched-new": func() *Dashboard {
+			d := previewDashboard("11:07", nil)
+			d.activeTab = tabSchedule
+			d.schedNew()
+			return d
+		},
 		"18-request": func() *Dashboard {
 			d := previewDashboard("11:07", nil)
 			d.activeTab = tabCalendar
