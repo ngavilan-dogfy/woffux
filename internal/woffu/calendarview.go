@@ -8,9 +8,9 @@ import (
 
 // CalendarDay represents a single day in the calendar view.
 type CalendarDay struct {
-	Date       string   `json:"date"`
-	DayName    string   `json:"day"`
-	Status     string   `json:"status"` // "working", "weekend", "holiday", "absence"
+	Date               string   `json:"date"`
+	DayName            string   `json:"day"`
+	Status             string   `json:"status"` // "working", "weekend", "holiday", "absence"
 	Mode               string   `json:"mode"`   // "office", "remote", ""
 	IsHoliday          bool     `json:"is_holiday"`
 	IsWeekend          bool     `json:"is_weekend"`

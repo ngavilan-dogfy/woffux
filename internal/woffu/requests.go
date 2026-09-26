@@ -9,23 +9,23 @@ import (
 
 // RequestType is an available request type (vacation, telework, etc).
 type RequestType struct {
-	ID          int     `json:"id"`
-	Name        string  `json:"name"`
-	IsVacation  bool    `json:"is_vacation"`
-	IsPresence  bool    `json:"is_presence"`
-	Allocated   string  `json:"allocated,omitempty"`
-	Used        string  `json:"used,omitempty"`
-	Available   string  `json:"available,omitempty"`
+	ID         int    `json:"id"`
+	Name       string `json:"name"`
+	IsVacation bool   `json:"is_vacation"`
+	IsPresence bool   `json:"is_presence"`
+	Allocated  string `json:"allocated,omitempty"`
+	Used       string `json:"used,omitempty"`
+	Available  string `json:"available,omitempty"`
 }
 
 // UserRequest is a submitted request.
 type UserRequest struct {
-	RequestID   int    `json:"request_id"`
-	EventName   string `json:"event_name"`
-	StartDate   string `json:"start_date"`
-	EndDate     string `json:"end_date"`
-	Status      string `json:"status"`
-	Days        int    `json:"days,omitempty"`
+	RequestID int    `json:"request_id"`
+	EventName string `json:"event_name"`
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+	Status    string `json:"status"`
+	Days      int    `json:"days,omitempty"`
 }
 
 // SignSlot is a clock in/out slot for today.
@@ -51,7 +51,7 @@ type woffuAgreementEvent struct {
 	Name             string `json:"Name"`
 	IsVacation       bool   `json:"IsVacation"`
 	IsPresence       bool   `json:"IsPresence"`
-	UserStats *struct {
+	UserStats        *struct {
 		AllocatedFormatted json.RawMessage `json:"AllocatedFormatted"`
 		UsedFormatted      json.RawMessage `json:"UsedFormatted"`
 		AvailableFormatted json.RawMessage `json:"AvailableFormatted"`

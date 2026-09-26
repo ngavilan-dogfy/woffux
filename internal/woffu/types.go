@@ -46,8 +46,8 @@ type woffuGetToken struct {
 // User types
 
 type woffuAgreementEventAvailability struct {
-	AgreementEventID int    `json:"AgreementEventId"`
-	Name             string `json:"Name"`
+	AgreementEventID   int    `json:"AgreementEventId"`
+	Name               string `json:"Name"`
 	AvailableFormatted struct {
 		Resource string   `json:"Resource"`
 		Values   []string `json:"Values"`

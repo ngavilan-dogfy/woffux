@@ -7,14 +7,14 @@ import (
 
 // UserProfile contains the user's profile info from Woffu.
 type UserProfile struct {
-	FullName         string
-	Email            string
-	CompanyName      string
-	DepartmentName   string
-	JobTitle         string
-	OfficeName       string
-	OfficeLatitude   *float64
-	OfficeLongitude  *float64
+	FullName        string
+	Email           string
+	CompanyName     string
+	DepartmentName  string
+	JobTitle        string
+	OfficeName      string
+	OfficeLatitude  *float64
+	OfficeLongitude *float64
 }
 
 type woffuUserFull struct {
