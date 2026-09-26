@@ -55,7 +55,7 @@ var autoOnCmd = &cobra.Command{
 
 		if enableErr != nil {
 			uiErr("Could not enable: %s", enableErr)
-			return nil
+			return quietError{enableErr}
 		}
 
 		fmt.Println()
@@ -103,7 +103,7 @@ var autoOffCmd = &cobra.Command{
 
 		if disableErr != nil {
 			uiErr("Could not disable: %s", disableErr)
-			return nil
+			return quietError{disableErr}
 		}
 
 		fmt.Println()

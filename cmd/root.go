@@ -1,13 +1,16 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/charmbracelet/huh"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	"github.com/ngavilan-dogfy/woffux/internal/tui"
@@ -15,9 +18,10 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:     "woffux",
-	Short:   "Woffu time tracking CLI",
-	Version: Version,
+	Use:          "woffux",
+	Short:        "Woffu time tracking CLI",
+	Version:      Version,
+	SilenceUsage: true,
 	Long: `woffux — your Woffu clock-ins on autopilot.
 
 Run woffux with no arguments for the dashboard (setup starts the first time).
@@ -62,10 +66,51 @@ Output: colours in a terminal, TSV when piped, --json for scripts.`,
 	},
 }
 
+// quietError fails a command (exit 1) without printing it again: the
+// command already explained the problem.
+type quietError struct{ error }
+
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	rootCmd.SilenceErrors = true
+	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
+		return fmt.Errorf("%w (see 'woffux %s --help')", err, strings.TrimSpace(strings.TrimPrefix(c.CommandPath(), "woffux")))
+	})
+	err := rootCmd.Execute()
+	if err != nil {
+		var quiet quietError
+		if !errors.As(err, &quiet) {
+			printError(err)
+		}
+	}
+	if err != nil {
 		os.Exit(1)
 	}
+}
+
+// printError reports a failure on stderr: one styled line for a person, a
+// plain "Error: …" line for logs (the local agent's log reads these), and a
+// JSON object when the command was asked for JSON.
+func printError(err error) {
+	switch {
+	case wantsJSON():
+		b, _ := json.Marshal(map[string]string{"error": err.Error()})
+		fmt.Fprintln(os.Stderr, string(b))
+	case term.IsTerminal(int(os.Stderr.Fd())):
+		fmt.Fprintln(os.Stderr, uiIndent+stBad.Render("✗ ")+stText.Render(err.Error()))
+		fmt.Fprintln(os.Stderr)
+	default:
+		fmt.Fprintln(os.Stderr, "Error:", err)
+	}
+}
+
+// wantsJSON reports whether --json appeared anywhere on the command line.
+func wantsJSON() bool {
+	for _, a := range os.Args[1:] {
+		if a == "--json" {
+			return true
+		}
+	}
+	return false
 }
 
 func init() {
@@ -89,10 +134,9 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 }
 
-// loadConfigOrSetup loads config + password, or guides user to setup.
+// loadConfigOrSetup loads the settings and the password, offering the
+// setup when there are none and a person is at the terminal.
 func loadConfigOrSetup() (*config.Config, string, error) {
-	hint := lipgloss.NewStyle().Foreground(obFaint)
-
 	cfg, err := config.Load()
 	if err != nil && isTTY() {
 		// First run: don't send people off to read docs — start setup.
@@ -110,35 +154,15 @@ func loadConfigOrSetup() (*config.Config, string, error) {
 		}
 	}
 	if err != nil {
-		fmt.Println()
-		fmt.Printf("  %s No config found. Run %s to get started.\n\n",
-			lipgloss.NewStyle().Foreground(obOut).Render("!"),
-			lipgloss.NewStyle().Bold(true).Render("woffux setup"))
-		fmt.Println(hint.Render("  This is a one-time setup that configures your Woffu credentials,"))
-		fmt.Println(hint.Render("  GPS coordinates, and GitHub Actions for auto-signing."))
-		fmt.Println()
-		return nil, "", fmt.Errorf("run 'woffux setup' first")
+		return nil, "", errors.New("woffux isn't set up yet — run 'woffux setup'")
 	}
-
 	if cfg.WoffuEmail == "" || cfg.WoffuCompanyURL == "" {
-		fmt.Println()
-		fmt.Printf("  %s Config is incomplete. Run %s to reconfigure.\n\n",
-			lipgloss.NewStyle().Foreground(obOut).Render("!"),
-			lipgloss.NewStyle().Bold(true).Render("woffux setup"))
-		return nil, "", fmt.Errorf("incomplete config — run 'woffux setup'")
+		return nil, "", errors.New("your settings are incomplete — run 'woffux setup'")
 	}
-
 	password, err := config.GetPassword(cfg.WoffuEmail)
 	if err != nil {
-		fmt.Println()
-		fmt.Printf("  %s Password not found in keychain for %s.\n",
-			lipgloss.NewStyle().Foreground(obOut).Render("!"),
-			cfg.WoffuEmail)
-		fmt.Printf("  Run %s to reconfigure.\n\n",
-			lipgloss.NewStyle().Bold(true).Render("woffux setup"))
-		return nil, "", fmt.Errorf("password not in keychain — run 'woffux setup'")
+		return nil, "", fmt.Errorf("there's no Woffu password for %s in the keychain — run 'woffux setup'", cfg.WoffuEmail)
 	}
-
 	return cfg, password, nil
 }
 

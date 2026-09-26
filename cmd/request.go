@@ -132,6 +132,9 @@ Examples:
 			uiLine(stOut.Render(fmt.Sprintf("%d of %d sent", successCount, len(dates))))
 		}
 		uiHint("woffux requests")
+		if successCount < len(dates) {
+			return quietError{fmt.Errorf("%d of %d requests failed", len(dates)-successCount, len(dates))}
+		}
 		return nil
 	},
 }
@@ -218,17 +221,22 @@ Find IDs with:  woffux requests`,
 		}
 
 		fmt.Println()
+		failed := 0
 		for _, id := range ids {
 			var cancelErr error
 			spinner.New().Title(fmt.Sprintf("Cancelling %s…", labels[id])).
 				Action(func() { cancelErr = woffu.CancelRequest(companyClient, token, id) }).Run()
 			if cancelErr != nil {
 				uiErr("%s — %s", labels[id], cancelErr)
+				failed++
 			} else {
 				uiOK("%s cancelled", labels[id])
 			}
 		}
 		fmt.Println()
+		if failed > 0 {
+			return quietError{fmt.Errorf("%d of %d cancellations failed", failed, len(ids))}
+		}
 		return nil
 	},
 }
