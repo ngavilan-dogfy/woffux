@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/selfupdate"
 	"github.com/ngavilan-dogfy/woffux/internal/tui"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
@@ -20,7 +21,7 @@ import (
 var rootCmd = &cobra.Command{
 	Use:          "woffux",
 	Short:        "Woffu time tracking CLI",
-	Version:      Version,
+	Version:      currentBuild().Short(),
 	SilenceUsage: true,
 	Long: `woffux — your Woffu clock-ins on autopilot.
 
@@ -75,6 +76,7 @@ func Execute() {
 	rootCmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
 		return fmt.Errorf("%w (see 'woffux %s --help')", err, strings.TrimSpace(strings.TrimPrefix(c.CommandPath(), "woffux")))
 	})
+	notifier := startNotifier()
 	err := rootCmd.Execute()
 	if err != nil {
 		var quiet quietError
@@ -82,6 +84,7 @@ func Execute() {
 			printError(err)
 		}
 	}
+	notifier.Print(os.Stderr)
 	if err != nil {
 		os.Exit(1)
 	}
@@ -101,6 +104,20 @@ func printError(err error) {
 	default:
 		fmt.Fprintln(os.Stderr, "Error:", err)
 	}
+}
+
+// startNotifier looks for a newer release in the background (cached, at
+// most once a day) when a person is at a terminal; the notice prints after
+// the command, on stderr. The dashboard has its own.
+func startNotifier() *selfupdate.Notifier {
+	if len(os.Args) < 2 || !isTTY() || !term.IsTerminal(int(os.Stderr.Fd())) || wantsJSON() {
+		return nil
+	}
+	switch os.Args[1] {
+	case "update", "upgrade", "version", "--version", "-v", "completion", "__complete", "__completeNoDesc":
+		return nil
+	}
+	return selfupdate.StartNotifier(updateTool(), cacheDir())
 }
 
 // wantsJSON reports whether --json appeared anywhere on the command line.
@@ -176,10 +193,10 @@ func runDashboard() error {
 	client := woffu.NewWoffuClient(cfg.WoffuURL)
 	companyClient := woffu.NewCompanyClient(cfg.WoffuCompanyURL)
 
-	tui.AppVersion = Version
+	tui.AppVersion = currentBuild().Version
 	tui.CheckLatest = func() (string, error) {
-		rel, err := fetchLatestReleaseFromWeb(releasesWeb)
-		return rel.TagName, err
+		rel, err := selfupdate.Latest(updateTool())
+		return rel.Tag, err
 	}
 	model := tui.NewDashboard(client, companyClient, cfg, password)
 	p := tea.NewProgram(model, tea.WithAltScreen())
