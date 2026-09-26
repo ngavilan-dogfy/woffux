@@ -1,8 +1,11 @@
 package woffu
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"strings"
 )
@@ -39,11 +42,10 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 	var newLogin woffuNewLogin
 	err := client.doJSON("GET", "/svc/accounts/authorization/use-new-login?email="+url.QueryEscape(email), nil, nil, &newLogin)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "400") || strings.Contains(errStr, "UserNotFound") || strings.Contains(errStr, "404") {
+		if hasHTTPStatus(err, http.StatusBadRequest, http.StatusNotFound) || strings.Contains(err.Error(), "UserNotFound") {
 			return "", &AuthError{Kind: ErrBadEmail, Detail: fmt.Sprintf("email \"%s\" not found in Woffu", email), Wrapped: err}
 		}
-		if strings.Contains(errStr, "no such host") || strings.Contains(errStr, "connection refused") {
+		if isTransientRequestError(err) {
 			return "", &AuthError{Kind: ErrNetwork, Detail: "cannot connect to Woffu", Wrapped: err}
 		}
 		return "", &AuthError{Kind: ErrUnknown, Detail: err.Error(), Wrapped: err}
@@ -53,9 +55,11 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 	var loginConfig woffuLoginConfiguration
 	err = client.doJSON("GET", "/svc/accounts/companies/login-configuration-by-email?email="+url.QueryEscape(email), nil, nil, &loginConfig)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "400") || strings.Contains(errStr, "UserNotFound") || strings.Contains(errStr, "404") {
+		if hasHTTPStatus(err, http.StatusBadRequest, http.StatusNotFound) || strings.Contains(err.Error(), "UserNotFound") {
 			return "", &AuthError{Kind: ErrBadEmail, Detail: fmt.Sprintf("email \"%s\" not found in Woffu", email), Wrapped: err}
+		}
+		if isTransientRequestError(err) {
+			return "", &AuthError{Kind: ErrNetwork, Detail: "cannot connect to Woffu", Wrapped: err}
 		}
 		return "", &AuthError{Kind: ErrUnknown, Detail: err.Error(), Wrapped: err}
 	}
@@ -78,6 +82,13 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 		// Steps 1-2 passed, so the email is valid. Any error here is a password issue.
 		return "", &AuthError{Kind: ErrBadPassword, Detail: "wrong password", Wrapped: fmt.Errorf("status %d: %s", resp.StatusCode, string(body))}
 	}
+	if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+		return "", &AuthError{
+			Kind:    ErrNetwork,
+			Detail:  "cannot connect to Woffu",
+			Wrapped: fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body)),
+		}
+	}
 
 	// Extract cookies
 	var cookies []string
@@ -92,15 +103,33 @@ func Authenticate(client *Client, companyClient *Client, email, password string)
 		"Cookie": cookieHeader,
 	}, &tokenResp)
 	if err != nil {
-		errStr := err.Error()
-		if strings.Contains(errStr, "no such host") {
+		// Steps 1-3 reached Woffu, so the network works: an address that
+		// doesn't resolve is a company subdomain that doesn't exist.
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
 			return "", &AuthError{Kind: ErrBadCompany, Detail: "company domain not found", Wrapped: err}
 		}
-		if strings.Contains(errStr, "404") || strings.Contains(errStr, "401") || strings.Contains(errStr, "403") {
+		if isTransientRequestError(err) {
+			return "", &AuthError{Kind: ErrNetwork, Detail: "cannot connect to Woffu", Wrapped: err}
+		}
+		if hasHTTPStatus(err, http.StatusNotFound, http.StatusUnauthorized, http.StatusForbidden) {
 			return "", &AuthError{Kind: ErrBadCompany, Detail: "company not accessible", Wrapped: err}
 		}
 		return "", &AuthError{Kind: ErrUnknown, Detail: err.Error(), Wrapped: err}
 	}
 
 	return tokenResp.Token, nil
+}
+
+func hasHTTPStatus(err error, statuses ...int) bool {
+	var statusErr *HTTPStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	for _, status := range statuses {
+		if statusErr.StatusCode == status {
+			return true
+		}
+	}
+	return false
 }

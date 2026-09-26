@@ -3,8 +3,10 @@ package woffu
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +16,21 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	headers    map[string]string
+	retryWait  func(time.Duration)
+}
+
+// HTTPStatusError preserves the response status so callers can distinguish
+// an expired/revoked token from a temporary Woffu outage without parsing an
+// error string.
+type HTTPStatusError struct {
+	Method     string
+	URL        string
+	StatusCode int
+	Body       string
+}
+
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("request %s %s returned %d: %s", e.Method, e.URL, e.StatusCode, e.Body)
 }
 
 func NewWoffuClient(baseURL string) *Client {
@@ -21,6 +38,7 @@ func NewWoffuClient(baseURL string) *Client {
 	return &Client{
 		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		retryWait:  time.Sleep,
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
 			"Accept-Language": "es,es-ES;q=0.9",
@@ -39,6 +57,7 @@ func NewCompanyClient(companyURL string) *Client {
 	return &Client{
 		baseURL:    companyURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
+		retryWait:  time.Sleep,
 		headers: map[string]string{
 			"Accept":          "application/json, text/plain, */*",
 			"Accept-Language": "es,es-ES;q=0.9",
@@ -81,6 +100,26 @@ func (c *Client) doJSON(method, path string, body any, headers map[string]string
 }
 
 func (c *Client) do(opts requestOptions) error {
+	// Reads are safe to retry. Mutating requests, especially the sign toggle,
+	// must remain single-shot because a lost response does not mean the action
+	// was not applied by Woffu.
+	attempts := 1
+	if opts.Method == http.MethodGet && opts.Body == nil {
+		attempts = 3
+	}
+
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		err = c.doOnce(opts)
+		if err == nil || attempt == attempts || !isTransientRequestError(err) {
+			return err
+		}
+		c.waitBeforeRetry(time.Duration(attempt) * 500 * time.Millisecond)
+	}
+	return err
+}
+
+func (c *Client) doOnce(opts requestOptions) error {
 	url := c.baseURL + opts.Path
 
 	req, err := http.NewRequest(opts.Method, url, opts.Body)
@@ -110,7 +149,12 @@ func (c *Client) do(opts requestOptions) error {
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("request %s %s returned %d: %s", opts.Method, url, resp.StatusCode, string(respBody))
+		return &HTTPStatusError{
+			Method:     opts.Method,
+			URL:        url,
+			StatusCode: resp.StatusCode,
+			Body:       string(respBody),
+		}
 	}
 
 	if opts.Target != nil {
@@ -120,6 +164,24 @@ func (c *Client) do(opts requestOptions) error {
 	}
 
 	return nil
+}
+
+func (c *Client) waitBeforeRetry(delay time.Duration) {
+	if c.retryWait != nil {
+		c.retryWait(delay)
+		return
+	}
+	time.Sleep(delay)
+}
+
+func isTransientRequestError(err error) bool {
+	var statusErr *HTTPStatusError
+	if errors.As(err, &statusErr) {
+		return statusErr.StatusCode == http.StatusTooManyRequests || statusErr.StatusCode >= 500
+	}
+
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
 }
 
 // doRaw performs a request and returns the raw response (for cookie extraction).

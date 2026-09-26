@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,13 +113,49 @@ func AuthenticateCached(client *Client, companyClient *Client, email, password s
 		if err == nil && probe.UserID != 0 {
 			return token, nil
 		}
+		if err != nil && !isTokenRejection(err) {
+			// A timeout, connection reset, rate limit, or Woffu 5xx does not
+			// invalidate a locally unexpired token. Keep using it so a brief
+			// outage does not force the fragile four-request login flow.
+			return token, nil
+		}
 		ClearCachedToken(email, companyURL)
 	}
 
-	token, err := Authenticate(client, companyClient, email, password)
+	token, err := authenticateWithRetry(client, companyClient, email, password)
 	if err != nil {
 		return "", err
 	}
 	saveCachedToken(email, companyURL, token)
 	return token, nil
+}
+
+func isTokenRejection(err error) bool {
+	var statusErr *HTTPStatusError
+	return errors.As(err, &statusErr) &&
+		(statusErr.StatusCode == 401 || statusErr.StatusCode == 403)
+}
+
+func authenticateWithRetry(client *Client, companyClient *Client, email, password string) (string, error) {
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		token, err := Authenticate(client, companyClient, email, password)
+		if err == nil {
+			return token, nil
+		}
+		lastErr = err
+		if attempt == 3 || !isRetryableAuthError(err) {
+			break
+		}
+		client.waitBeforeRetry(time.Duration(attempt) * 500 * time.Millisecond)
+	}
+	return "", lastErr
+}
+
+// isRetryableAuthError: only a network problem is worth another try. The
+// login sends the password; repeating it on an error we don't understand
+// risks tripping Woffu's lockout for nothing.
+func isRetryableAuthError(err error) bool {
+	var authErr *AuthError
+	return errors.As(err, &authErr) && authErr.Kind == ErrNetwork
 }
