@@ -230,6 +230,20 @@ func editOneSetting(cfg *config.Config) (bool, error) {
 			EchoMode(huh.EchoModePassword).Value(&password))).Run(); err != nil || password == "" {
 			return false, nil
 		}
+		// Check it first: a wrong password stored here would fail every
+		// automatic sign, and repeated failed sign-ins can lock the account.
+		var checkErr error
+		spinner.New().Title("Checking it with Woffu…").Action(func() {
+			_, checkErr = woffu.Authenticate(woffu.NewWoffuClient(cfg.WoffuURL), woffu.NewCompanyClient(cfg.WoffuCompanyURL), cfg.WoffuEmail, password)
+		}).Run()
+		switch authKind(checkErr) {
+		case woffu.ErrBadPassword, woffu.ErrNoPasswordLogin:
+			uiErr("Woffu didn't accept that password — nothing was changed")
+			return false, nil
+		}
+		if checkErr != nil {
+			uiWarn("Couldn't check it with Woffu (%s); saving it anyway", checkErr)
+		}
 		if err := config.SetPassword(cfg.WoffuEmail, password); err != nil {
 			return true, fmt.Errorf("save password: %w", err)
 		}
