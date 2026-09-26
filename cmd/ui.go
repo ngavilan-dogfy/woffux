@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -165,3 +167,13 @@ func uiBar(f float64, w int, color lipgloss.Color) string {
 
 // stripANSIcmd removes styling (for text that goes into form descriptions).
 func stripANSIcmd(s string) string { return ansi.Strip(s) }
+
+// tildePath shows paths under the home folder as ~/…
+func tildePath(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(home, p); err == nil && rel != "." && !filepath.IsAbs(rel) && rel[0] != '.' {
+			return "~/" + rel
+		}
+	}
+	return p
+}

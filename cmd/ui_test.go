@@ -1,10 +1,12 @@
 package cmd
 
 import (
-	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ngavilan-dogfy/woffux/internal/config"
 )
 
 func TestUITrimDropsEmoji(t *testing.T) {
@@ -50,3 +52,14 @@ func dayOn() dayT { return dayT{Enabled: true} }
 
 type scheduleT = config.Schedule
 type dayT = config.DaySchedule
+
+func TestTildePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if got := tildePath(filepath.Join(home, "bin", "woffux")); got != "~/bin/woffux" {
+		t.Errorf("got %q", got)
+	}
+	if got := tildePath("/usr/local/bin/woffux"); got != "/usr/local/bin/woffux" {
+		t.Errorf("got %q", got)
+	}
+}

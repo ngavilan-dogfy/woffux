@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -326,7 +325,7 @@ func offerClaudeSkill() {
 		Affirmative("Add it").Negative("Skip").Value(&install))).Run(); err != nil || !install {
 		return
 	}
-	if err := installClaudeSkill(); err != nil {
+	if _, err := installSkill(); err != nil {
 		fmt.Printf("  %s Skill install failed: %s\n", stBad.Render("!"), err)
 		return
 	}
@@ -1186,33 +1185,4 @@ func extractCompany(email string) string {
 		return domainParts[0]
 	}
 	return domain
-}
-
-// claudeCodeDetected returns true if ~/.claude/ exists.
-func claudeCodeDetected() bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	info, err := os.Stat(filepath.Join(home, ".claude"))
-	return err == nil && info.IsDir()
-}
-
-// installClaudeSkill copies the embedded skill to ~/.claude/skills/woffux/.
-func installClaudeSkill() error {
-	dest, err := skillPath()
-	if err != nil {
-		return err
-	}
-
-	data, err := skillFS.ReadFile("skill_data/SKILL.md")
-	if err != nil {
-		return fmt.Errorf("read embedded skill: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-
-	return os.WriteFile(dest, data, 0644)
 }
