@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestSaveSchedulePresetNormalizesName(t *testing.T) {
 	cfg := &Config{}
@@ -90,4 +94,41 @@ func makeScheduleForTest(times ...string) Schedule {
 	return Schedule{
 		Monday: DaySchedule{Enabled: true, Times: entries},
 	}
+}
+
+func TestConfigFileIsPrivate(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".woffux.yaml")
+
+	// A file an older version left readable by everyone…
+	if err := os.WriteFile(path, []byte("woffu_email: someone@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// …is made private as soon as woffux reads it,
+	if _, err := Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if mode := fileMode(t, path); mode != 0o600 {
+		t.Fatalf("after Load the mode is %o, want 600", mode)
+	}
+	// and stays private when saved again.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(&Config{WoffuEmail: "someone@example.com"}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if mode := fileMode(t, path); mode != 0o600 {
+		t.Fatalf("after Save the mode is %o, want 600", mode)
+	}
+}
+
+func fileMode(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
 }

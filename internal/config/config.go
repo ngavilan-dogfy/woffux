@@ -184,6 +184,21 @@ func configPath() (string, error) {
 	return filepath.Join(home, ".woffux.yaml"), nil
 }
 
+// Path is where the settings live: ~/.woffux.yaml.
+func Path() (string, error) { return configPath() }
+
+// keepPrivate makes the settings file readable only by its owner: it holds
+// home coordinates and, with notifications on, a Telegram bot token.
+// os.WriteFile applies a mode only when it creates the file, so files from
+// older versions (or copied around) could have been left world-readable.
+func keepPrivate(path string) error {
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm()&0o077 == 0 {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
 func Load() (*Config, error) {
 	path, err := configPath()
 	if err != nil {
@@ -197,6 +212,8 @@ func Load() (*Config, error) {
 		}
 		return nil, fmt.Errorf("cannot read config: %w", err)
 	}
+
+	_ = keepPrivate(path)
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -271,11 +288,10 @@ func Save(cfg *Config) error {
 		return fmt.Errorf("cannot marshal config: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0600); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("cannot write config: %w", err)
 	}
-
-	return nil
+	return keepPrivate(path)
 }
 
 // envTiming reads natural-timing settings from WOFFUX_TIMING (CI). A bad
