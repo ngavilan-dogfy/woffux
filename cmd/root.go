@@ -21,7 +21,6 @@ import (
 var rootCmd = &cobra.Command{
 	Use:          "woffux",
 	Short:        "Woffu time tracking CLI",
-	Version:      currentBuild().Short(),
 	SilenceUsage: true,
 	Long: `woffux — your Woffu clock-ins on autopilot.
 
