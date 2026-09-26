@@ -58,6 +58,7 @@ Settings
   woffux setup               Guided setup (re-run any time)
   woffux config              All settings at a glance
   woffux config edit         Change any setting
+  woffux doctor              Check everything, with a fix for each problem
   woffux update              Update to the latest version
 
 Output: colours in a terminal, TSV when piped, --json for scripts.`,

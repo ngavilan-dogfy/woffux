@@ -59,7 +59,13 @@ func TestTildePath(t *testing.T) {
 	if got := tildePath(filepath.Join(home, "bin", "woffux")); got != "~/bin/woffux" {
 		t.Errorf("got %q", got)
 	}
+	if got := tildePath(filepath.Join(home, ".woffux.yaml")); got != "~/.woffux.yaml" {
+		t.Errorf("got %q", got)
+	}
 	if got := tildePath("/usr/local/bin/woffux"); got != "/usr/local/bin/woffux" {
 		t.Errorf("got %q", got)
+	}
+	if got := tildePath(filepath.Dir(home)); got != filepath.Dir(home) {
+		t.Errorf("a folder above home: got %q", got)
 	}
 }

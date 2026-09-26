@@ -171,7 +171,7 @@ func stripANSIcmd(s string) string { return ansi.Strip(s) }
 // tildePath shows paths under the home folder as ~/…
 func tildePath(p string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		if rel, err := filepath.Rel(home, p); err == nil && rel != "." && !filepath.IsAbs(rel) && rel[0] != '.' {
+		if rel, err := filepath.Rel(home, p); err == nil && rel != "." && !filepath.IsAbs(rel) && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			return "~/" + rel
 		}
 	}
