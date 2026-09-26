@@ -1,9 +1,16 @@
+# Every push to main that carries a feat, fix, perf or breaking change
+# publishes a release: the version comes from the commits since the last tag
+# (scripts/next-version.sh), the notes too (scripts/release-notes.sh).
+#
+# Every GitHub backup signer downloads releases/latest on each run, so a
+# release is live for everyone the moment it's published: the tests run
+# before anything is built.
 name: Auto Version
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    # woffux sync commits these through the API: nothing to release.
     paths-ignore:
       - '.github/workflows/sign.yml'
       - '.github/workflows/sign-manual.yml'
@@ -17,17 +24,14 @@ concurrency:
   group: auto-version-main
   cancel-in-progress: false
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   release:
     name: Version and release
-    if: github.repository == 'ngavilan-dogfy/woffux'  # not in personal forks
+    if: github.repository == 'ngavilan-dogfy/woffux'  # forks are signers, not development copies
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -37,14 +41,13 @@ jobs:
 
       - name: No release needed
         if: steps.version.outputs.should_release != 'true'
-        run: |
-          echo "No version bump needed. Conventional release types are: breaking, feat, fix, perf."
+        run: echo "No release. Only feat, fix, perf and breaking changes publish a version."
 
       - name: Setup Go
         if: steps.version.outputs.should_release == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
 
       - name: Test
         if: steps.version.outputs.should_release == 'true'
@@ -52,31 +55,23 @@ jobs:
 
       - name: Build binaries
         if: steps.version.outputs.should_release == 'true'
-        run: |
-          VERSION="${{ steps.version.outputs.tag }}"
-          LDFLAGS="-s -w -X github.com/ngavilan-dogfy/woffux/cmd.Version=${VERSION}"
-          mkdir -p dist
-          GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffux-darwin-arm64 ./cmd/woffux
-          GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffux-darwin-amd64 ./cmd/woffux
-          GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o dist/woffux-linux-amd64 ./cmd/woffux
-          GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o dist/woffux-linux-arm64 ./cmd/woffux
+        run: scripts/build-release.sh "${{ steps.version.outputs.tag }}"
+
+      - name: Write release notes
+        if: steps.version.outputs.should_release == 'true'
+        run: scripts/release-notes.sh "${{ steps.version.outputs.tag }}" "${{ steps.version.outputs.previous_tag }}" > "$RUNNER_TEMP/notes.md"
 
       - name: Publish release
         if: steps.version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "::warning::Release $tag already exists; skipping publish."
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release $TAG already exists; skipping."
             exit 0
           fi
-
-          gh release create "$tag" \
-            dist/woffux-darwin-arm64 \
-            dist/woffux-darwin-amd64 \
-            dist/woffux-linux-amd64 \
-            dist/woffux-linux-arm64 \
+          gh release create "$TAG" dist/* \
             --target "$GITHUB_SHA" \
-            --title "$tag" \
-            --generate-notes
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"

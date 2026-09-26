@@ -4,20 +4,46 @@ on:
   pull_request:
   push:
     branches: [main]
+    # woffux sync commits these through the API: nothing to build.
+    paths-ignore:
+      - '.github/workflows/sign.yml'
+      - '.github/workflows/sign-manual.yml'
+      - '.github/workflows/keepalive.yml'
 
 permissions:
   contents: read
 
 jobs:
   test:
-    name: Build, vet and test
-    if: github.repository == 'ngavilan-dogfy/woffux'  # not in personal forks
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    if: github.repository == 'ngavilan-dogfy/woffux'  # forks are signers, not development copies
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "Run gofmt -w on:"; echo "$unformatted"; exit 1; fi
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./... -count=1
+      - run: go test -race -count=1 ./...
+
+  scripts:
+    name: Installer and release scripts
+    if: github.repository == 'ngavilan-dogfy/woffux'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: shellcheck -s sh install.sh
+      - run: shellcheck scripts/*.sh
+      - name: Release notes render
+        run: scripts/release-notes.sh v0.0.0-ci

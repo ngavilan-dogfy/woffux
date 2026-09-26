@@ -1,4 +1,7 @@
 /woffux
+/bin/
+/dist/
+/previews/
 
 # Workflow files are managed via GitHub Contents API (woffux sync).
 # Tracking them in git causes code pushes to overwrite the schedule.
