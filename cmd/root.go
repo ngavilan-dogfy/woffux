@@ -60,6 +60,7 @@ Settings
   woffux config edit         Change any setting
   woffux doctor              Check everything, with a fix for each problem
   woffux update              Update to the latest version
+  woffux uninstall           Stop signing, or remove woffux completely
 
 Output: colours in a terminal, TSV when piped, --json for scripts.`,
 	RunE: func(cmd *cobra.Command, args []string) error {

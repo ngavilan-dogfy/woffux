@@ -11,7 +11,10 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 )
 
-const upstreamRepo = "ngavilan-dogfy/woffux"
+// UpstreamRepo is woffux's own repository: the one forks are made from.
+const UpstreamRepo = "ngavilan-dogfy/woffux"
+
+const upstreamRepo = UpstreamRepo
 
 // ForkAndSetup forks the upstream repo (or uses existing), sets secrets, generates workflows, and pushes.
 func ForkAndSetup(cfg *config.Config, password string) (string, error) {
