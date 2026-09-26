@@ -208,3 +208,92 @@ func TestAuthenticateReportsACompanyThatDoesNotExist(t *testing.T) {
 		t.Fatalf("err = %v, want an ErrBadCompany AuthError", err)
 	}
 }
+
+func TestCompanyURLFromDomain(t *testing.T) {
+	for in, want := range map[string]string{
+		"acme.woffu.com":          "https://acme.woffu.com",
+		" ACME.woffu.com/ ":       "https://acme.woffu.com",
+		"https://acme.woffu.com":  "https://acme.woffu.com",
+		"acme":                    "https://acme.woffu.com",
+		"":                        "",
+		"acme.com":                "", // not a Woffu host: the session cookie would go there
+		"evil.com/acme.woffu.com": "",
+		"acme.woffu.com.evil.com": "",
+	} {
+		if got := companyURLFromDomain(in); got != want {
+			t.Errorf("companyURLFromDomain(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestLookupAccount(t *testing.T) {
+	config := `{"providerName":null,"openIdLogin":false,"domain":"acme.woffu.com","woffuLogin":true,"autoLogin":false}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("email") == "" {
+			t.Errorf("%s without an email", r.URL.Path)
+		}
+		switch r.URL.Path {
+		case "/svc/accounts/authorization/use-new-login":
+			if r.URL.Query().Get("email") == "nobody@acme.com" {
+				http.Error(w, `{"message":"UserNotFound"}`, http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"useNewLogin":true,"companyId":7}`))
+		case "/svc/accounts/companies/login-configuration-by-email":
+			_, _ = w.Write([]byte(config))
+		default:
+			t.Errorf("unexpected request %s: a lookup must not sign in", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := NewWoffuClient(server.URL)
+	client.retryWait = func(time.Duration) {}
+
+	account, err := LookupAccount(client, "ana@acme.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.CompanyURL != "https://acme.woffu.com" || !account.PasswordLogin || account.SSO {
+		t.Fatalf("account = %+v", account)
+	}
+
+	config = `{"providerName":"Google","openIdLogin":true,"domain":"acme.woffu.com","woffuLogin":false}`
+	account, err = LookupAccount(client, "ana@acme.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.PasswordLogin || !account.SSO || account.SSOProvider != "Google" {
+		t.Fatalf("single sign-on account = %+v", account)
+	}
+
+	// A configuration without the field doesn't turn passwords off.
+	config = `{"domain":"acme.woffu.com"}`
+	if account, err = LookupAccount(client, "ana@acme.com"); err != nil || !account.PasswordLogin {
+		t.Fatalf("account = %+v, err = %v", account, err)
+	}
+
+	_, err = LookupAccount(client, "nobody@acme.com")
+	var authErr *AuthError
+	if !errors.As(err, &authErr) || authErr.Kind != ErrBadEmail {
+		t.Fatalf("err = %v, want ErrBadEmail", err)
+	}
+}
+
+func TestSignInExplainsSingleSignOnOnly(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	client := NewWoffuClient(server.URL)
+	companyClient := NewCompanyClient(server.URL)
+
+	_, err := SignIn(client, companyClient, &Account{PasswordLogin: false, SSO: true}, "ana@acme.com", "x")
+	var authErr *AuthError
+	if !errors.As(err, &authErr) || authErr.Kind != ErrNoPasswordLogin {
+		t.Fatalf("err = %v, want ErrNoPasswordLogin", err)
+	}
+	_, err = SignIn(client, companyClient, &Account{PasswordLogin: true}, "ana@acme.com", "x")
+	if !errors.As(err, &authErr) || authErr.Kind != ErrBadPassword {
+		t.Fatalf("err = %v, want ErrBadPassword", err)
+	}
+}

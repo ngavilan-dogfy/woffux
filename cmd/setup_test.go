@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ngavilan-dogfy/woffux/internal/config"
+	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
 func TestValidateClockTime(t *testing.T) {
@@ -163,5 +164,44 @@ func TestApplyScheduleWizardResultNoSummerClearsSeasons(t *testing.T) {
 	}
 	if len(cfg.Seasons.Periods) != 0 {
 		t.Fatal("answering 'no summer hours' must remove the seasonal switch")
+	}
+}
+
+func TestWorkEmailSkipsPersonalAddresses(t *testing.T) {
+	cases := []struct {
+		emails []string
+		want   string
+	}{
+		{[]string{"ana.garcia@gmail.com", "agarcia@acme.com"}, "agarcia@acme.com"},
+		{[]string{"agarcia@acme.com", "ana@hotmail.es"}, "agarcia@acme.com"},
+		{[]string{"12345+ana@users.noreply.github.com", "ana@outlook.com", "ana@icloud.com"}, ""},
+		{[]string{"ana@olive.com"}, "ana@olive.com"}, // "live." is a prefix, not a substring
+		{nil, ""},
+	}
+	for _, c := range cases {
+		if got := workEmail(c.emails); got != c.want {
+			t.Errorf("workEmail(%q) = %q, want %q", c.emails, got, c.want)
+		}
+	}
+}
+
+func TestCompanyURLFor(t *testing.T) {
+	fromWoffu := &woffu.Account{CompanyURL: "https://acme-group.woffu.com"}
+	cases := []struct {
+		account *woffu.Account
+		email   string
+		typed   string
+		want    string
+	}{
+		{fromWoffu, "ana@acme.com", "", "https://acme-group.woffu.com"},       // what Woffu says wins over the email
+		{&woffu.Account{}, "ana@acme.com", "", "https://acme.woffu.com"},      // otherwise a guess from the email
+		{nil, "ana@acme.com", "", "https://acme.woffu.com"},                   //
+		{fromWoffu, "ana@acme.com", " Initech ", "https://initech.woffu.com"}, // what the user typed wins over both
+		{nil, "ana@acme.com", "https://initech.woffu.com/", "https://initech.woffu.com"},
+	}
+	for _, c := range cases {
+		if got := companyURLFor(c.account, c.email, c.typed); got != c.want {
+			t.Errorf("companyURLFor(%+v, %q, %q) = %q, want %q", c.account, c.email, c.typed, got, c.want)
+		}
 	}
 }

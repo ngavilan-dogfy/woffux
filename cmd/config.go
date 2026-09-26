@@ -11,6 +11,7 @@ import (
 	"github.com/ngavilan-dogfy/woffux/internal/agent"
 	"github.com/ngavilan-dogfy/woffux/internal/config"
 	gh "github.com/ngavilan-dogfy/woffux/internal/github"
+	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
 var configCmd = &cobra.Command{
@@ -206,13 +207,22 @@ func editOneSetting(cfg *config.Config) (bool, error) {
 			}))).Run(); err != nil || email == cfg.WoffuEmail {
 			return false, nil
 		}
+		var account *woffu.Account
+		var lookupErr error
+		spinner.New().Title("Looking it up in Woffu…").Action(func() {
+			account, lookupErr = woffu.LookupAccount(woffu.NewWoffuClient(woffuAPI), email)
+		}).Run()
+		if authKind(lookupErr) == woffu.ErrBadEmail {
+			uiErr("Woffu doesn't know %s — nothing was changed", email)
+			return false, nil
+		}
 		if pw, err := config.GetPassword(cfg.WoffuEmail); err == nil {
 			_ = config.SetPassword(email, pw)
 		} else {
 			uiWarn("The password wasn't copied to the new email — set it next.")
 		}
 		cfg.WoffuEmail = email
-		cfg.WoffuCompanyURL = "https://" + extractCompany(email) + ".woffu.com"
+		cfg.WoffuCompanyURL = companyURLFor(account, email, "")
 		syncNeeded = true
 	case "password":
 		if err := newForm(huh.NewGroup(huh.NewInput().Title("New Woffu password").

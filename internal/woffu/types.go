@@ -32,11 +32,11 @@ type woffuNewLogin struct {
 }
 
 type woffuLoginConfiguration struct {
-	AutoLogin    bool   `json:"autoLogin"`
-	Domain       string `json:"domain"`
-	OpenIDLogin  bool   `json:"openIdLogin"`
-	ProviderName string `json:"providerName"`
-	WoffuLogin   bool   `json:"woffuLogin"`
+	AutoLogin    bool    `json:"autoLogin"`
+	Domain       string  `json:"domain"`
+	OpenIDLogin  bool    `json:"openIdLogin"`
+	ProviderName *string `json:"providerName"`
+	WoffuLogin   *bool   `json:"woffuLogin"`
 }
 
 type woffuGetToken struct {
