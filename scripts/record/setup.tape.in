@@ -1,0 +1,57 @@
+Output setup.gif
+Set Shell "bash"
+Set FontFamily "FuraMono Nerd Font Mono"
+Set FontSize 16
+Set Width 1060
+Set Height 900
+Set Padding 20
+Set Theme { "name": "Gruvbox Dark", "background": "#292929", "foreground": "#ebdbb2", "black": "#292929", "red": "#f77768", "green": "#b8bb26", "yellow": "#fabd2f", "blue": "#84a498", "magenta": "#d3859a", "cyan": "#8ec07b", "white": "#ebdbb2", "brightBlack": "#928374", "brightRed": "#f77768", "brightGreen": "#b8bb26", "brightYellow": "#fabd2f", "brightBlue": "#84a498", "brightMagenta": "#d3859a", "brightCyan": "#8ec07b", "brightWhite": "#ebdbb2", "selection": "#504945", "cursor": "#ebdbb2" }
+Set TypingSpeed 45ms
+Hide
+Type "export HOME=@R@/home PS1='$ ' WOFFUX_E2E_WOFFU=http://127.0.0.1:@PORT@ WOFFUX_E2E_LOG=@R@/open.log WOFFUX_NO_UPDATE_NOTIFIER=1 PATH=@R@/bin:$PATH && clear"
+Enter
+Sleep 500ms
+Show
+Sleep 500ms
+Type "woffux setup"
+Sleep 400ms
+Enter
+Sleep 3.5s
+Enter
+Sleep 700ms
+Type "correct-horse-battery"
+Sleep 500ms
+Enter
+Sleep 3.5s
+Enter
+Sleep 1.5s
+Enter
+Sleep 700ms
+Type "https://www.google.com/maps/@40.4153,-3.6845,17z"
+Sleep 600ms
+Enter
+Sleep 3s
+Enter
+Sleep 3s
+Enter
+Sleep 2s
+Type "y"
+Sleep 2s
+Enter
+Sleep 2.5s
+Enter
+Sleep 1.5s
+Enter
+Sleep 500ms
+Enter
+Sleep 3.5s
+Enter
+Sleep 2.5s
+Enter
+Sleep 2.5s
+Enter
+Sleep 3s
+Enter
+Sleep 4.5s
+Type "n"
+Sleep 3s

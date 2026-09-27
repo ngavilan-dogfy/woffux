@@ -40,7 +40,7 @@ var agentOnCmd = &cobra.Command{
 		}
 		fmt.Println()
 		uiOK("This Mac will sign for you while it's awake")
-		uiLine(stFaint.Render("  Log: " + agent.LogPath()))
+		uiLine(stFaint.Render("  Log: " + tildePath(agent.LogPath())))
 		fmt.Println()
 		return nil
 	},
@@ -90,7 +90,7 @@ func agentStatus() error {
 	default:
 		uiRow("State", stFaint.Render("○ off")+stFaint.Render("  turn on: woffux agent on"))
 	}
-	uiRow("Log", stSubtle.Render(agent.LogPath()))
+	uiRow("Log", stSubtle.Render(tildePath(agent.LogPath())))
 
 	if lines := agent.RecentLog(12); len(lines) > 0 {
 		uiSection("Recent activity")

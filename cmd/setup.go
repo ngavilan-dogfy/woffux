@@ -258,10 +258,10 @@ func applySigners(cfg *config.Config, password string, plan signerPlan) {
 	if agent.Supported() {
 		switch {
 		case plan.mac:
-			if err := agent.Install(); err != nil {
+			if err := installAgent(); err != nil {
 				fmt.Printf("  %s Couldn't start the local agent: %s\n", stBad.Render("!"), err)
 			} else {
-				fmt.Printf("  %s This Mac will sign for you %s\n", stIn.Render("✓"), stFaint.Render("(log: "+agent.LogPath()+")"))
+				fmt.Printf("  %s This Mac will sign for you %s\n", stIn.Render("✓"), stFaint.Render("(log: "+tildePath(agent.LogPath())+")"))
 			}
 		case agent.Installed():
 			if err := agent.Uninstall(); err == nil {
@@ -956,7 +956,8 @@ func sendTestTelegram(cfg config.TelegramConfig) error {
 	return nil
 }
 
-func openURL(url string) {
+// openURL opens a page in the browser; swappable (the e2e build only logs).
+var openURL = func(url string) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -970,6 +971,14 @@ func openURL(url string) {
 		cmd.Start()
 	}
 }
+
+// installAgent turns this Mac's signer on; swappable, so the e2e build that
+// records the setup never touches the real launchd.
+var installAgent = agent.Install
+
+// companyAddress is where the company's Woffu lives; the e2e build points
+// every company at its fake Woffu.
+var companyAddress = func(url string) string { return url }
 
 // woffuAPI is Woffu's shared API, where every sign-in starts.
 var woffuAPI = "https://app.woffu.com/api"
@@ -1005,7 +1014,7 @@ func loginFlow(existing *config.Config) (email, password, companyURL string, pro
 			if authErr != nil {
 				return
 			}
-			companyURL = companyURLFor(account, email, company)
+			companyURL = companyAddress(companyURLFor(account, email, company))
 			companyClient := woffu.NewCompanyClient(companyURL)
 			var token string
 			token, authErr = woffu.SignIn(client, companyClient, account, email, password)
