@@ -41,6 +41,7 @@ type dataMsg struct {
 	token      string
 	signInfo   *woffu.SignInfo
 	events     []woffu.AvailableUserEvent
+	reqTypes   []woffu.RequestType
 	profile    *woffu.UserProfile
 	slots      []woffu.SignSlot
 	homeDays   []woffu.CalendarDay // current month
@@ -160,6 +161,7 @@ type Dashboard struct {
 	companyId   int
 	signInfo    *woffu.SignInfo
 	events      []woffu.AvailableUserEvent
+	reqTypes    []woffu.RequestType // allocated / used / available per type
 	profile     *woffu.UserProfile
 	slots       []woffu.SignSlot
 	homeDays    []woffu.CalendarDay
@@ -279,6 +281,9 @@ func (d *Dashboard) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		d.token = msg.token
 		d.signInfo = msg.signInfo
 		d.events = msg.events
+		if msg.reqTypes != nil {
+			d.reqTypes = msg.reqTypes
+		}
 		if msg.profile != nil {
 			d.profile = msg.profile
 		}

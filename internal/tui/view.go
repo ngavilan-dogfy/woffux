@@ -173,6 +173,9 @@ func (d *Dashboard) footerHints() []string {
 	case overlayMenu:
 		return []string{keycap("↑↓", "choose"), keycap("⏎", "select")}
 	}
+	if d.loading || (d.loadErr != nil && d.signInfo == nil) {
+		return nil
+	}
 	switch d.activeTab {
 	case tabToday:
 		hints = []string{keycap("s", "sign "+strings.ToLower(d.pendingSignAction())), keycap("⏎", "actions"), keycap("r", "refresh"), keycap("tab", "calendar")}

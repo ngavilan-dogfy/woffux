@@ -52,7 +52,8 @@ func (d *Dashboard) fetchData() tea.Cmd {
 			wg        sync.WaitGroup
 		)
 
-		wg.Add(5)
+		wg.Add(6)
+		go func() { defer wg.Done(); msg.reqTypes, _ = woffu.GetRequestTypes(companyClient, token) }()
 		go func() { defer wg.Done(); msg.profile, _ = woffu.GetUserProfile(companyClient, token) }()
 		go func() {
 			defer wg.Done()

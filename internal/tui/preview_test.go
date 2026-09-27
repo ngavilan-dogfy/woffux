@@ -100,6 +100,14 @@ func previewDashboard(hhmm string, slots []woffu.SignSlot) *Dashboard {
 		{Name: "Asistencia médica / Médico familiares (hasta 1º)", Available: 3, Unit: "days"},
 		{Name: "Asuntos Propios", Available: 0, Unit: "days"},
 	}
+	d.reqTypes = []woffu.RequestType{
+		{Name: "Vacaciones", Allocated: "23", Used: "17", Available: "6"},
+		{Name: "Asistencia médica / Médico familiares (hasta 1º)", Allocated: "14", Used: "10", Available: "3"},
+		{Name: "Asuntos Propios", Allocated: "1", Used: "1", Available: "0"},
+		{Name: "Bolsa de horas", Allocated: "28", Used: "2", Available: "26"},
+		{Name: "Horas Sindicales", Allocated: "363", Used: "0", Available: "363"},
+		{Name: "Ausencia por Razones de Fuerza Mayor", Allocated: "32", Used: "0", Available: "32"},
+	}
 	d.agentActive = &on
 	d.autoActive = &off
 	d.autoInSync = &inSync

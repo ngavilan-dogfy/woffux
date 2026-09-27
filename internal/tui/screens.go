@@ -184,9 +184,9 @@ func (d *Dashboard) renderBalance(h int) string {
 	var days, hours []string
 	for _, e := range events {
 		if unitRank(e.Unit) == 0 {
-			days = append(days, balanceRow(e, colW))
+			days = append(days, d.balanceRow(e, colW))
 		} else {
-			hours = append(hours, balanceRow(e, colW))
+			hours = append(hours, d.balanceRow(e, colW))
 		}
 	}
 	var body string
@@ -214,26 +214,62 @@ func unitRank(u string) int {
 	return 1
 }
 
-func balanceRow(e woffu.AvailableUserEvent, w int) string {
-	amount := formatAmount(e.Available, e.Unit)
-	color := balanceColor(e)
-	amt := fg(color).Bold(true).Render(amount)
-	if e.Available <= 0 {
-		amt = sFaint.Render(amount)
-	}
-	name := sText.Render(truncate(e.Name, w-lipgloss.Width(amount)-2))
-	if e.Available <= 0 {
-		name = sFaint.Render(truncate(e.Name, w-lipgloss.Width(amount)-2))
-	}
-	top := spread(name, amt, w)
+// allowance is how much of a balance was granted and used this period.
+type allowance struct {
+	allocated, used float64
+	ok              bool
+}
 
-	// A gentle gauge: days are compared to a working month, hours to a
-	// working week, so the bar says "a lot" or "almost none" at a glance.
-	scale := 22.0
-	if unitRank(e.Unit) == 1 {
-		scale = 40
+// allowanceFor matches a balance to its request type's allocation.
+func (d *Dashboard) allowanceFor(e woffu.AvailableUserEvent) allowance {
+	norm := func(s string) string { return strings.ToLower(strings.TrimSpace(stripEmoji(s))) }
+	for _, t := range d.reqTypes {
+		if norm(t.Name) != norm(e.Name) {
+			continue
+		}
+		var a allowance
+		if _, err := fmt.Sscanf(strings.TrimSpace(t.Allocated), "%g", &a.allocated); err != nil || a.allocated <= 0 {
+			return allowance{}
+		}
+		fmt.Sscanf(strings.TrimSpace(t.Used), "%g", &a.used)
+		a.ok = true
+		return a
 	}
-	return top + "\n" + progressBar(e.Available/scale, w, color)
+	return allowance{}
+}
+
+func stripEmoji(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 0x2600 {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// balanceRow shows a balance against what was granted: "6 of 23 days
+// left", a bar of the share left, and how much was used. Balances without
+// an allowance (e.g. paid leave per event) show just the number.
+func (d *Dashboard) balanceRow(e woffu.AvailableUserEvent, w int) string {
+	color := balanceColor(e)
+	a := d.allowanceFor(e)
+	amount := formatAmount(e.Available, e.Unit)
+	if a.ok {
+		amount = strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", e.Available), ".0"), "") + " of " + formatAmount(a.allocated, e.Unit) + " left"
+	}
+	amtStyle := fg(color).Bold(true)
+	nameStyle := sText
+	if e.Available <= 0 {
+		amtStyle, nameStyle = sFaint, sFaint
+	}
+	name := nameStyle.Render(truncate(e.Name, w-lipgloss.Width(amount)-2))
+	top := spread(name, amtStyle.Render(amount), w)
+	if !a.ok {
+		return top + "\n" + sFaint.Render("no yearly allowance")
+	}
+	used := sFaint.Render(formatAmount(a.used, e.Unit) + " used")
+	return top + "\n" + progressBar(e.Available/a.allocated, w-lipgloss.Width(used)-2, color) + "  " + used
 }
 
 func balanceColor(e woffu.AvailableUserEvent) lipgloss.Color {
@@ -483,7 +519,7 @@ func (d *Dashboard) renderHelp() string {
 	group := func(title string, rows [][2]string) string {
 		out := []string{label(title)}
 		for _, r := range rows {
-			out = append(out, padRight(sKey.Render(r[0]), 13)+sSubtle.Render(r[1]))
+			out = append(out, padRight(sKey.Render(r[0]), 15)+sSubtle.Render(r[1]))
 		}
 		return strings.Join(out, "\n")
 	}
@@ -520,10 +556,10 @@ func (d *Dashboard) renderHelp() string {
 		{"S / t", "summer hours · timing"},
 	})
 	left := everywhere + "\n\n" + autopilot + "\n\n" + schedule
-	w := min(92, d.width-6)
+	w := min(100, d.width-6)
 	var body string
-	if w >= 90 {
-		body = twoColumns(left, calendar, 32, 4)
+	if w >= 98 {
+		body = twoColumns(left, calendar, 36, 4)
 	} else {
 		body = left + "\n\n" + calendar
 	}
