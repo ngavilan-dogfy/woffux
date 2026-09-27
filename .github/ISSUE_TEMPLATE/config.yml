@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
-  - name: Read the FAQ first
-    url: https://github.com/ngavilan-dogfy/woffux#faq
-    about: Holidays, manual signs, a sleeping Mac, update errors, privacy…
+  - name: Troubleshooting and FAQ
+    url: https://github.com/ngavilan-dogfy/woffux#troubleshooting
+    about: Holidays, manual signs, a sleeping Mac, a changed password, pausing it…
+  - name: Report a security problem
+    url: https://github.com/ngavilan-dogfy/woffux/security/advisories/new
+    about: Privately, please — not in a public issue.
