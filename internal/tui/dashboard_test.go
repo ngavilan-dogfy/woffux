@@ -545,3 +545,45 @@ func TestRequestsBlockedWhileBusy(t *testing.T) {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// ── Design pass: one truth about the next sign ──
+
+func TestCountdownTargetsTheRealMoment(t *testing.T) {
+	d := previewDashboard("07:52", nil) // natural timing: Mac signs ~08:27
+	p := d.plan()
+	hs := d.heroState(p)
+	want := clockDuration(p.nextAt.Sub(p.now).Truncate(time.Minute))
+	if hs.big != want {
+		t.Fatalf("hero counts to %s, want the Mac's moment (%s)", hs.big, want)
+	}
+	next := stripANSI(d.renderNext(p, 200))
+	if !strings.Contains(next, p.nextAt.Format("15:04")) || !strings.Contains(next, "(08:30)") {
+		t.Fatalf("next line should show the moment and the scheduled time: %q", next)
+	}
+}
+
+func TestLateNextSaysWhenItRetries(t *testing.T) {
+	d := previewDashboard("09:12", nil)
+	next := stripANSI(d.renderNext(d.plan(), 200))
+	if !strings.Contains(next, "due since 08:30") || !strings.Contains(next, "retries by 09:16") {
+		t.Fatalf("late next line = %q", next)
+	}
+}
+
+func TestBalanceShowsAllowance(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	row := stripANSI(d.balanceRow(woffu.AvailableUserEvent{Name: "Vacaciones", Available: 6, Unit: "days"}, 60))
+	if !strings.Contains(row, "6 of 23 days left") || !strings.Contains(row, "17 days used") {
+		t.Fatalf("balance row = %q", row)
+	}
+}
+
+func TestGlanceSummarisesTheMonth(t *testing.T) {
+	d := previewDashboard("11:07", nil)
+	g := stripANSI(d.renderGlance(d.plan(), 80))
+	for _, want := range []string{"6 of 23 days left", "2 waiting for approval", "worked in September"} {
+		if !strings.Contains(g, want) {
+			t.Errorf("glance missing %q:\n%s", want, g)
+		}
+	}
+}

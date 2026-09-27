@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/ngavilan-dogfy/woffux/internal/agent"
+	"github.com/ngavilan-dogfy/woffux/internal/timing"
 	"github.com/ngavilan-dogfy/woffux/internal/woffu"
 )
 
@@ -25,6 +27,9 @@ func (d *Dashboard) renderToday(h int) string {
 		leftW := w * 57 / 100
 		rightW := w - leftW - 4
 		left := d.renderHero(p, leftW) + "\n\n" + d.renderTimeline(p, leftW)
+		if g := d.renderGlance(p, leftW); g != "" && lipgloss.Height(left)+lipgloss.Height(g)+3 < h {
+			left += "\n\n" + g
+		}
 		right := d.renderWeek(p, rightW) + "\n\n" + d.renderAutopilot(p, rightW)
 		if up := d.renderComingUp(rightW, 3); up != "" && lipgloss.Height(right)+lipgloss.Height(up)+2 < h {
 			right += "\n\n" + up
@@ -76,12 +81,21 @@ func (d *Dashboard) heroState(p dayPlan) heroState {
 		return heroState{accent: cOK, badge: sOK.Bold(true).Render("✓ DAY COMPLETE"), big: clockDuration(p.workedDur), lines: lines}
 
 	case phaseBefore:
-		until := p.next.minute - nowMin
-		lines := []string{sText.Render("until you clock in"), sSubtle.Render("scheduled at " + clockOf(p.next.minute))}
+		// Count down to the moment the sign will really happen.
+		until := time.Duration(p.next.minute-nowMin) * time.Minute
+		sub := "scheduled at " + clockOf(p.next.minute)
+		if d.anySignerActive() && !p.nextAt.IsZero() {
+			until = p.nextAt.Sub(now).Truncate(time.Minute)
+			sub = signerName(d) + " signs at " + p.nextAt.Format("15:04")
+			if p.nextAt.Format("15:04") != clockOf(p.next.minute) {
+				sub += sFaint.Render(" (" + clockOf(p.next.minute) + ")")
+			}
+		}
+		lines := []string{sText.Render("until you clock in"), sSubtle.Render(sub)}
 		if p.targetDur > 0 {
 			lines = append(lines, sFaint.Render(formatDuration(p.targetDur)+" planned today"))
 		}
-		return heroState{accent: cBrand, badge: sBrand.Render("○ NOT STARTED"), big: clockDuration(time.Duration(until) * time.Minute), lines: lines}
+		return heroState{accent: cBrand, badge: sBrand.Render("○ NOT STARTED"), big: clockDuration(until), lines: lines}
 
 	case phaseLate:
 		late := nowMin - p.next.minute
@@ -172,51 +186,101 @@ func padLines(lines []string, n int) []string {
 func (d *Dashboard) renderNext(p dayPlan, w int) string {
 	nowMin := p.now.Hour()*60 + p.now.Minute()
 
+	// Nothing left today: the first sign of the next working day.
 	if p.next == nil {
-		if p.phase == phaseOff || p.phase == phaseDone {
-			if nd, ok := nextWorkingDay(p.now, d.homeDays, d.cfg.Schedule); ok {
-				ds, _ := scheduleFor(d.cfg.Schedule, nd.Weekday())
-				if first := plannedSigns(ds); len(first) > 0 {
-					return sFaint.Render("Next  ") + sText.Render("IN "+clockOf(first[0].minute)) +
-						sFaint.Render(" · "+relativeDay(p.now, nd))
-				}
-			}
+		if p.phase != phaseOff && p.phase != phaseDone {
+			return ""
 		}
-		return ""
+		nd, ok := nextWorkingDay(p.now, d.homeDays, d.cfg.Schedule)
+		if !ok {
+			return ""
+		}
+		ds, _ := scheduleFor(d.cfg.Schedule, nd.Weekday())
+		signs := plannedSigns(ds)
+		if len(signs) == 0 {
+			return ""
+		}
+		at := clockOf(signs[0].minute)
+		if d.anySignerActive() {
+			ev := make([]timing.Event, len(signs))
+			for i, s := range signs {
+				ev[i] = timing.Event{Minute: s.minute, In: s.in}
+			}
+			at = d.cfg.Timing.Targets(nd, ev)[0].Format("15:04")
+		}
+		return sFaint.Render("Next  ") + sOK.Bold(true).Render("IN") + sText.Render(" "+relativeDay(p.now, nd)+" at ") + sBold.Render(at)
 	}
 
 	dir, dirStyle := "IN", sOK
 	if !p.next.in {
 		dir, dirStyle = "OUT", sWarn
 	}
-	head := sFaint.Render("Next  ") + dirStyle.Bold(true).Render(dir) + " " + sBold.Render(clockOf(p.next.minute))
-	var when string
-	if p.nextDue {
-		when = sWarn.Render("due " + formatDuration(time.Duration(nowMin-p.next.minute)*time.Minute) + " ago")
-	} else {
-		when = sSubtle.Render(humanUntil(p.next.minute - nowMin))
-	}
+	sched := clockOf(p.next.minute)
+	auto := d.anySignerActive() && !p.nextAt.IsZero()
 
-	var who string
-	moment := ""
-	if !p.nextAt.IsZero() {
-		moment = " at " + p.nextAt.Format("15:04")
-	}
+	var parts []string
 	switch {
-	case d.agentOn():
-		who = sOK.Render("●") + sSubtle.Render(" This Mac"+moment)
-	case d.githubOn():
-		who = sWarn.Render("●") + sSubtle.Render(" GitHub"+moment+" (can run late)")
-	case d.agentActive == nil && d.autoActive == nil:
-		who = sFaint.Render("checking autopilot…")
+	case p.nextDue:
+		// Late: say when the retry happens, not a moment that already passed.
+		parts = append(parts, sFaint.Render("Next  ")+dirStyle.Bold(true).Render(dir)+sWarn.Render(" due since "+sched))
+		switch {
+		case d.agentOn():
+			parts = append(parts, sSubtle.Render("This Mac retries by "+clockOf(nextAgentRun(nowMin))))
+		case d.githubOn():
+			parts = append(parts, sSubtle.Render("GitHub will retry (can be late)"))
+		default:
+			parts = append(parts, sBad.Bold(true).Render("press s to sign"))
+		}
 	default:
-		who = sBad.Bold(true).Render("you sign it — autopilot is off")
+		at := sched
+		if auto {
+			at = p.nextAt.Format("15:04")
+		}
+		head := sFaint.Render("Next  ") + dirStyle.Bold(true).Render(dir) + " " + sBold.Render(at)
+		if auto && at != sched {
+			head += sFaint.Render(" (" + sched + ")")
+		}
+		until := p.next.minute - nowMin
+		if auto {
+			until = int(p.nextAt.Sub(p.now).Minutes())
+		}
+		parts = append(parts, head, sSubtle.Render(humanUntil(until)))
+		switch {
+		case d.agentOn():
+			parts = append(parts, sOK.Render("●")+sSubtle.Render(" This Mac"))
+		case d.githubOn():
+			parts = append(parts, sWarn.Render("●")+sSubtle.Render(" GitHub (can run late)"))
+		case d.agentActive == nil && d.autoActive == nil:
+			parts = append(parts, sFaint.Render("checking autopilot…"))
+		default:
+			parts = append(parts, sBad.Bold(true).Render("you sign it — autopilot is off"))
+		}
 	}
-	line := head + sFaint.Render(" · ") + when + sFaint.Render(" · ") + who
-	if lipgloss.Width(line) > w {
-		line = head + sFaint.Render(" · ") + when
+	line := strings.Join(parts, sFaint.Render(" · "))
+	for lipgloss.Width(line) > w && len(parts) > 1 {
+		parts = parts[:len(parts)-1]
+		line = strings.Join(parts, sFaint.Render(" · "))
 	}
 	return line
+}
+
+// signerName is who will make the next automatic sign.
+func signerName(d *Dashboard) string {
+	if d.agentOn() {
+		return "This Mac"
+	}
+	return "GitHub"
+}
+
+// nextAgentRun is the local agent's next run minute at or after nowMin.
+func nextAgentRun(nowMin int) int {
+	h, m := nowMin/60, nowMin%60
+	for _, am := range agent.Minutes {
+		if am >= m {
+			return h*60 + am
+		}
+	}
+	return (h+1)*60 + agent.Minutes[0]
 }
 
 // progressBar draws a smooth bar with eighth-block precision.
@@ -284,15 +348,20 @@ func (d *Dashboard) renderTimeline(p dayPlan, w int) string {
 	for hours/step > barW/5 {
 		step++
 	}
+	lastEnd := -1
 	for hm := lo; hm <= hi; hm += 60 * step {
 		pos := int(float64(hm-lo) / perCell)
 		lbl := []rune(fmt.Sprintf("%02d", hm/60))
 		if pos+len(lbl) > barW {
 			pos = barW - len(lbl)
 		}
+		if pos <= lastEnd { // would touch the previous label
+			continue
+		}
 		for i, r := range lbl {
 			ticks[pos+i] = r
 		}
+		lastEnd = pos + len(lbl)
 	}
 
 	// Bar
@@ -390,7 +459,7 @@ func (d *Dashboard) renderWeek(p dayPlan, w int) string {
 	}
 
 	nameW := 7
-	valW := 8
+	valW := 10
 	barW := max(6, w-nameW-valW-2)
 
 	var rows []string
@@ -416,11 +485,11 @@ func (d *Dashboard) renderWeek(p dayPlan, w int) string {
 			mid = weekBar(fill, tgt, barW, wd)
 			switch {
 			case wd.worked > 0:
-				val = sText.Render(formatDurationShort(wd.worked))
+				val = sText.Render(formatDuration(wd.worked))
 			case wd.future || wd.isToday:
-				val = sFaint.Render(formatDurationShort(wd.target))
+				val = sFaint.Render(formatDuration(wd.target))
 			default:
-				val = sBad.Render("none")
+				val = sBad.Render("! no signs")
 			}
 		}
 		rows = append(rows, padRight(nameSt.Render(name), nameW+1)+padRight(mid, barW+1)+lipgloss.PlaceHorizontal(valW, lipgloss.Right, val))
@@ -574,4 +643,75 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
+}
+
+// renderGlance answers the side questions people open Woffu for: how much
+// vacation is left, what's waiting for approval, how the month is going.
+func (d *Dashboard) renderGlance(p dayPlan, w int) string {
+	var rows []string
+	row := func(k, v string) { rows = append(rows, padRight(sFaint.Render(k), 12)+v) }
+
+	for _, e := range d.events {
+		n := strings.ToLower(e.Name)
+		if strings.Contains(n, "vacacion") && !strings.Contains(n, "media") {
+			v := sText.Render(formatAmount(e.Available, e.Unit) + " left")
+			if a := d.allowanceFor(e); a.ok {
+				num := strings.TrimSuffix(fmt.Sprintf("%.1f", e.Available), ".0")
+				v = sBold.Render(num) + sFaint.Render(" of "+formatAmount(a.allocated, e.Unit)+" left")
+			}
+			row("Vacation", v)
+			break
+		}
+	}
+
+	seen := map[int]bool{}
+	var next string
+	for _, day := range d.homeDays {
+		for _, r := range day.Requests {
+			if r.Status == "pending" && !seen[r.RequestID] {
+				seen[r.RequestID] = true
+				if next == "" && day.Date >= p.now.Format("2006-01-02") {
+					t, _ := time.Parse("2006-01-02", day.Date)
+					next = relativeDay(p.now, t)
+				}
+			}
+		}
+	}
+	if n := len(seen); n > 0 {
+		v := sWarn.Render(fmt.Sprintf("◷ %d waiting for approval", n))
+		if next != "" {
+			v += sFaint.Render(" · next " + next)
+		}
+		row("Requests", v)
+	}
+
+	today := p.now.Format("2006-01-02")
+	worked := p.workedDur
+	dates := map[string]bool{}
+	for _, s := range d.monthSigns {
+		if s.Date < today && !dates[s.Date] {
+			dates[s.Date] = true
+			worked += workedFromRecords(s.Date, d.monthSigns)
+		}
+	}
+	remote := 0
+	for _, day := range d.homeDays {
+		if day.Date <= today && day.Status == "working" && day.Mode == "remote" {
+			remote++
+		}
+	}
+	if worked > 0 || remote > 0 {
+		v := sText.Render(formatDuration(worked)) + sFaint.Render(" worked in "+p.now.Format("January"))
+		if remote > 0 {
+			v += sFaint.Render(fmt.Sprintf(" · %d remote %s", remote, plural(remote, "day", "days")))
+		}
+		row("This month", v)
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	for i, r := range rows {
+		rows[i] = truncate(r, w)
+	}
+	return label("At a glance") + "\n" + strings.Join(rows, "\n")
 }
