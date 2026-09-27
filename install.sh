@@ -355,7 +355,9 @@ main() {
 		if [ "$copy" = "$signer" ]; then
 			info "This Mac's signer still runs $(tildify "$copy")${have:+ ($have)}."
 		else
-			info "An older copy is still at $(tildify "$copy")${have:+ ($have)}; nothing runs it. Remove it with: rm $(tildify "$copy")"
+			rm_cmd="rm"
+			[ -w "$(dirname "$copy")" ] || rm_cmd="sudo rm"
+			info "An older copy is still at $(tildify "$copy")${have:+ ($have)}; nothing runs it. Remove it with: $rm_cmd $(tildify "$copy")"
 		fi
 	done
 
