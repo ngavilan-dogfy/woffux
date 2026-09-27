@@ -152,8 +152,15 @@ func ParseNotes(body string) []string {
 		}
 		text := noteTrailer.ReplaceAllString(strings.TrimSpace(m[1]), "")
 		text = notePrefix.ReplaceAllString(text, "")
-		text = notePR.ReplaceAllString(text, "")
-		text = noteSHA.ReplaceAllString(text, "")
+		// Trailing "(#12)" and "(76835b6)" come in either order; strip
+		// until neither is left.
+		for {
+			t := noteSHA.ReplaceAllString(notePR.ReplaceAllString(text, ""), "")
+			if t == text {
+				break
+			}
+			text = t
+		}
 		text = strings.TrimSpace(text)
 		if text == "" {
 			continue

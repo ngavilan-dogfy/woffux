@@ -227,3 +227,14 @@ func TestNotifier(t *testing.T) {
 		t.Error("opt-out ignored")
 	}
 }
+
+// Release notes written by the release script end in "(#12) (76835b6)":
+// both suffixes must go, whatever their order.
+func TestParseNotesStripsPRAndSHAInAnyOrder(t *testing.T) {
+	body := "## Features\n\n- Design pass — one truth about the next sign, real balances (#12) (76835b6)\n- Fix (76835b6) (#12)\n"
+	got := ParseNotes(body)
+	want := []string{"Design pass — one truth about the next sign, real balances", "Fix"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ParseNotes = %q, want %q", got, want)
+	}
+}
